@@ -1,4 +1,5 @@
-from crewai import Agent, Task, Crew
+from crewai import Agent, Task, Crew, Process
+from crewai.callbacks import CrewCallbackHandler, TaskCallbackHandler, AgentCallbackHandler
 from langchain_community.tools import DuckDuckGoSearchRun
 import pandas as pd
 import os
@@ -7,6 +8,11 @@ import subprocess
 import sys
 import time
 import requests
+import re
+from datetime import datetime
+import textwrap
+import json
+from typing import Any, Dict, List, Optional, Union
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +25,175 @@ litellm._turn_on_debug()
 LLAMA_MODEL = "meta-llama/Meta-Llama-3-8B"
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
 CREW_TEMPERATURE = float(os.getenv("CREW_TEMPERATURE", 0.5))
+
+# Terminal colors for better formatting
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    GRAY = '\033[90m'
+
+# Custom callback handler for improved TUI
+class ChatTUICallbackHandler(CrewCallbackHandler):
+    def __init__(self):
+        super().__init__()
+        self.task_index = 1
+        self.agent_colors = {
+            "Property Data Analyst": Colors.BLUE,
+            "Housing & Economic Research Specialist": Colors.GREEN,
+            "Attainable Housing Financial Analyst": Colors.YELLOW,
+            "Attainable Housing Development Strategist": Colors.CYAN
+        }
+        # Print a header for the conversation
+        self._print_header("PROPERTY ANALYSIS CREW - INTERACTIVE SESSION")
+        print(f"\n{Colors.GRAY}Starting the analysis process with specialized agents...{Colors.ENDC}\n")
+    
+    def _print_header(self, text):
+        width = min(os.get_terminal_size().columns, 80)
+        print("\n" + "=" * width)
+        print(f"{Colors.BOLD}{Colors.HEADER}{text.center(width)}{Colors.ENDC}")
+        print("=" * width)
+    
+    def _print_subheader(self, text):
+        width = min(os.get_terminal_size().columns, 80)
+        print("\n" + "-" * width)
+        print(f"{Colors.BOLD}{text.center(width)}{Colors.ENDC}")
+        print("-" * width)
+    
+    def _wrap_text(self, text, initial_indent="", subsequent_indent="  "):
+        width = min(os.get_terminal_size().columns, 80) - len(initial_indent)
+        wrapped_text = textwrap.fill(
+            text,
+            width=width,
+            initial_indent=initial_indent,
+            subsequent_indent=subsequent_indent
+        )
+        return wrapped_text
+    
+    def _format_tool_use(self, tool_name, input_data):
+        # Format tool usage in a more compact and readable way
+        if isinstance(input_data, dict):
+            try:
+                formatted_input = json.dumps(input_data, indent=2)
+                return f"{Colors.GRAY}[Using {tool_name}]\n{formatted_input}{Colors.ENDC}"
+            except:
+                return f"{Colors.GRAY}[Using {tool_name}]{Colors.ENDC}"
+        else:
+            return f"{Colors.GRAY}[Using {tool_name}: {input_data}]{Colors.ENDC}"
+    
+    def on_crew_start(self, crew: Any) -> None:
+        pass
+    
+    def on_crew_end(self, crew: Any, result: str) -> None:
+        self._print_header("ANALYSIS COMPLETE")
+    
+    def on_task_start(self, task: Any) -> None:
+        agent_role = task.agent.role
+        color = self.agent_colors.get(agent_role, Colors.BOLD)
+        
+        self._print_subheader(f"TASK {self.task_index}: {task.description.split('CRITICAL')[0].strip()}")
+        print(f"\n{color}👤 {agent_role}{Colors.ENDC} is working on this task...\n")
+        self.task_index += 1
+    
+    def on_task_end(self, task: Any, output: str) -> None:
+        agent_role = task.agent.role
+        color = self.agent_colors.get(agent_role, Colors.BOLD)
+        
+        print(f"\n{color}✅ {agent_role} has completed their analysis.{Colors.ENDC}\n")
+    
+    def on_agent_start(self, agent: Any) -> None:
+        pass
+    
+    def on_agent_end(self, agent: Any) -> None:
+        pass
+    
+    def on_agent_message(self, agent: Any, message: str) -> None:
+        color = self.agent_colors.get(agent.role, Colors.BOLD)
+        
+        # Clean up the message - remove markdown formatting artifacts
+        message = re.sub(r'```json', '', message)
+        message = re.sub(r'```', '', message)
+        
+        # Format the message with the agent's color
+        formatted_message = self._wrap_text(
+            message, 
+            initial_indent=f"{color}💬 {agent.role}: {Colors.ENDC}",
+            subsequent_indent="   "
+        )
+        print(formatted_message)
+        print("")  # Add a blank line for readability
+    
+    def on_tool_start(self, agent: Any, tool: Any, input_data: Any) -> None:
+        color = self.agent_colors.get(agent.role, Colors.GRAY)
+        tool_name = getattr(tool, "name", str(tool))
+        
+        # Print a compact tool usage message
+        print(f"{color}🔧 {agent.role} is using {tool_name}...{Colors.ENDC}")
+    
+    def on_tool_end(self, agent: Any, tool: Any, input_data: Any, output: Any) -> None:
+        # We don't show the full tool output as it can be very verbose
+        # Just show a completion indicator
+        color = self.agent_colors.get(agent.role, Colors.GRAY)
+        tool_name = getattr(tool, "name", str(tool))
+        print(f"{color}✓ Tool {tool_name} completed{Colors.ENDC}")
+    
+    def on_agent_task_start(self, agent: Any, task: Any) -> None:
+        color = self.agent_colors.get(agent.role, Colors.BOLD)
+        print(f"{color}🔍 {agent.role} is analyzing the property data...{Colors.ENDC}")
+    
+    def on_agent_task_end(self, agent: Any, task: Any, output: str) -> None:
+        pass
+    
+    def on_subtask_start(self, subtask: Any, agent: Any) -> None:
+        pass
+    
+    def on_subtask_end(self, subtask: Any, agent: Any, output: str) -> None:
+        pass
+    
+    # Implement other callbacks as needed
+    def on_chain_start(self, *args, **kwargs) -> None:
+        pass
+    
+    def on_chain_end(self, *args, **kwargs) -> None:
+        pass
+    
+    def on_tool_error(self, *args, **kwargs) -> None:
+        print(f"{Colors.RED}Error during tool execution{Colors.ENDC}")
+    
+    def on_text(self, text: str) -> None:
+        pass
+    
+    def on_llm_start(self, *args, **kwargs) -> None:
+        pass
+    
+    def on_llm_end(self, *args, **kwargs) -> None:
+        pass
+    
+    def on_llm_error(self, *args, **kwargs) -> None:
+        print(f"{Colors.RED}Error during LLM processing{Colors.ENDC}")
+        
+    def on_tool_chain_start(self, *args, **kwargs) -> None:
+        pass
+    
+    def on_tool_chain_end(self, *args, **kwargs) -> None:
+        pass
+
+# Function to check if a terminal supports colors
+def supports_color():
+    """Check if the terminal supports colors."""
+    try:
+        import curses
+        curses.setupterm()
+        return curses.tigetnum("colors") > 2
+    except Exception:
+        # If there's any error, assume no color support
+        return False
 
 def check_ollama_installed():
     """Check if Ollama is installed"""
@@ -62,26 +237,54 @@ def setup_ollama_model():
 
 def use_anthropic_if_available():
     """Check if Anthropic API key is available"""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key and api_key != "your_anthropic_api_key_here":
-        print("\nFound valid Anthropic API key, using Claude model instead of Llama 3.")
-        return True
+    # Always return False to force using Ollama
     return False
 
 class PropertyAnalyzer:
     def __init__(self, csv_path="DATA/master.csv"):
         """Initialize the property analyzer with CSV data"""
         self.csv_path = csv_path
-        self.data = pd.read_csv(csv_path)
-        self.search_tool = DuckDuckGoSearchRun()
+        
+        # Check if CSV file exists
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV file not found: {csv_path}")
+        
+        # Try to load the CSV file
+        try:
+            self.data = pd.read_csv(csv_path)
+            
+            # Check for required columns
+            required_columns = ["StockNumber", "Property Address", "City", "State", "For Sale Price", "Land Area (AC)"]
+            missing_columns = [col for col in required_columns if col not in self.data.columns]
+            
+            if missing_columns:
+                raise ValueError(f"CSV file missing required columns: {', '.join(missing_columns)}")
+                
+        except pd.errors.ParserError as e:
+            raise ValueError(f"Error parsing CSV file: {e}")
+        except pd.errors.EmptyDataError:
+            raise ValueError("CSV file is empty")
+        except Exception as e:
+            raise ValueError(f"Error loading CSV file: {e}")
+        
+        # Try to initialize DuckDuckGo search tool, but handle exceptions
+        try:
+            self.search_tool = DuckDuckGoSearchRun()
+        except ImportError:
+            print("Warning: DuckDuckGo search package not available. Web search functionality will be limited.")
+            self.search_tool = None
+            
         self.column_descriptions = self._get_column_descriptions()
         
-        # Choose model based on availability
-        if check_ollama_installed() and check_ollama_running() and not use_anthropic_if_available():
+        # Always use Llama model if Ollama is installed and running
+        if check_ollama_installed() and check_ollama_running():
             self.model = LLAMA_MODEL
             setup_ollama_model()
         else:
-            self.model = ANTHROPIC_MODEL
+            print("\nOllama is not running. Please make sure Ollama is installed and running.")
+            print("You can install Ollama from https://ollama.com/")
+            print("Then start it with 'ollama serve' command in a separate terminal.")
+            sys.exit(1)
         
     def _get_column_descriptions(self):
         """Return descriptions for important data columns"""
@@ -238,6 +441,11 @@ class PropertyAnalyzer:
     def create_agents(self):
         """Create specialized agents for property analysis"""
         
+        # Set up tools
+        tools = []
+        if self.search_tool:
+            tools = [self.search_tool]
+        
         # Data Analyst Agent analyzes the raw property data
         data_analyst = Agent(
             role="Property Data Analyst",
@@ -252,7 +460,7 @@ class PropertyAnalyzer:
             most impactful and welcomed by the community.""",
             verbose=True,
             allow_delegation=True,
-            tools=[self.search_tool],
+            tools=tools,
             llm_model=self.model,
             temperature=CREW_TEMPERATURE
         )
@@ -270,7 +478,7 @@ class PropertyAnalyzer:
             actively encouraged to address housing shortages.""",
             verbose=True,
             allow_delegation=True,
-            tools=[self.search_tool],
+            tools=tools,
             llm_model=self.model,
             temperature=CREW_TEMPERATURE
         )
@@ -288,7 +496,7 @@ class PropertyAnalyzer:
             optimal price points that balance affordability with developer profitability.""",
             verbose=True,
             allow_delegation=True,
-            tools=[self.search_tool],
+            tools=tools,
             llm_model=self.model,
             temperature=CREW_TEMPERATURE
         )
@@ -307,7 +515,7 @@ class PropertyAnalyzer:
             amenities, and pricing strategies to ensure community success.""",
             verbose=True,
             allow_delegation=True,
-            tools=[self.search_tool],
+            tools=tools,
             llm_model=self.model,
             temperature=CREW_TEMPERATURE
         )
@@ -655,59 +863,112 @@ class PropertyAnalyzer:
         agents = self.create_agents()
         tasks = self.create_tasks(agents, property_data, property_location)
         
-        # Create and run the crew
+        # Create and run the crew with our custom TUI handler
+        callback_handler = ChatTUICallbackHandler() if supports_color() else None
+        
         crew = Crew(
             agents=list(agents.values()),
             tasks=tasks,
-            verbose=2
+            verbose=0 if callback_handler else 2,  # Set verbose=0 when using our handler
+            callbacks=[callback_handler] if callback_handler else None,
+            process=Process.sequential  # Ensure sequential processing for better readability
         )
         
         result = crew.kickoff()
-        return result
+        
+        # Display a nicely formatted final result
+        if callback_handler:
+            width = min(os.get_terminal_size().columns, 80)
+            print("\n" + "=" * width)
+            print(f"{Colors.BOLD}{Colors.HEADER}EXECUTIVE SUMMARY{Colors.ENDC}")
+            print("=" * width + "\n")
+            
+            # Format the result text for readability
+            wrapped_result = textwrap.fill(
+                result, 
+                width=width - 2,
+                initial_indent="  ",
+                subsequent_indent="  "
+            )
+            print(wrapped_result + "\n")
+            
+            return "Analysis complete. See the executive summary above."
+        else:
+            return result
 
 def main():
     """Main function to run the property analysis"""
-    print("\n===== PROPERTY ANALYSIS CREW =====")
+    # Prepare terminal for colored output if supported
+    use_colors = supports_color()
+    header_style = f"{Colors.BOLD}{Colors.HEADER}" if use_colors else ""
+    reset_style = Colors.ENDC if use_colors else ""
+    
+    print(f"\n{header_style}===== PROPERTY ANALYSIS CREW ====={reset_style}")
     print("This tool analyzes properties for attainable housing development potential")
     
     # Check for Ollama installation and setup model
     if not check_ollama_installed():
-        print("\nOllama is not installed. Looking for Anthropic API key...")
-        if use_anthropic_if_available():
-            print("Using Claude model for analysis.")
-        else:
-            print("\nNo Ollama installation or Anthropic API key found.")
-            print("Please either:")
-            print("1. Install Ollama from https://ollama.com/")
-            print("2. Or add your Anthropic API key to .env file")
-            sys.exit(1)
+        print("\nOllama is not installed.")
+        print("Please install Ollama from https://ollama.com/")
+        print("Then run the startup.sh script again.")
+        sys.exit(1)
     elif not check_ollama_running():
         print("\nOllama is installed but not running.")
-        if use_anthropic_if_available():
-            print("Using Claude model for analysis instead.")
-        else:
-            print("Please start Ollama before running this program.")
-            print("On macOS/Linux: Run 'ollama serve' in a terminal")
-            print("On Windows: Start Ollama from the start menu or run 'ollama serve' in a command prompt")
-            sys.exit(1)
+        print("Please start Ollama before running this program.")
+        print("On macOS/Linux: Run 'ollama serve' in a terminal")
+        print("On Windows: Start Ollama from the start menu or run 'ollama serve' in a command prompt")
+        sys.exit(1)
     else:
-        if use_anthropic_if_available():
-            print("Anthropic API key found. Using Claude model for analysis.")
-        else:
-            print("\nUsing Llama 3 8B model via Ollama")
-            setup_ollama_model()
+        print("\nUsing Llama 3 8B model via Ollama")
+        setup_ollama_model()
     
     try:
         # Initialize analyzer
-        analyzer = PropertyAnalyzer()
+        print("\nInitializing property analyzer...")
+        try:
+            analyzer = PropertyAnalyzer()
+            print("Property data loaded successfully.")
+        except FileNotFoundError as e:
+            print(f"\nError: {e}")
+            print("\nPlease ensure:")
+            print("1. You have run the startup.sh script first")
+            print("2. You have placed your property data CSV in the DATA directory as 'master.csv'")
+            sys.exit(1)
+        except ValueError as e:
+            print(f"\nError with CSV file: {e}")
+            print("\nPlease check your CSV file format. It should include columns for:")
+            print("StockNumber, Property Address, City, State, For Sale Price, Land Area (AC)")
+            sys.exit(1)
         
         # Check if we can read the CSV file
-        properties = analyzer.get_property_list()
+        try:
+            properties = analyzer.get_property_list()
+            if not properties:
+                print("Warning: No properties found in the CSV file.")
+                print("The file may be empty or have an unexpected format.")
+                response = input("Do you want to continue anyway? [y/N]: ")
+                if response.lower() != "y":
+                    print("Exiting program.")
+                    sys.exit(0)
+        except Exception as e:
+            print(f"Error retrieving property list: {e}")
+            print("The CSV file may have an invalid format.")
+            sys.exit(1)
         
         # Show available properties
-        print("\nAvailable Properties:")
+        if use_colors:
+            print(f"\n{Colors.CYAN}Available Properties:{Colors.ENDC}")
+        else:
+            print("\nAvailable Properties:")
+            
         for i, prop in enumerate(properties[:10]):  # Show first 10 for brevity
-            print(f"{i+1}. Stock# {prop['StockNumber']} - {prop['Property Address']}, {prop['City']}, {prop['State']}")
+            try:
+                if use_colors:
+                    print(f"{Colors.BOLD}{i+1}.{Colors.ENDC} Stock# {prop['StockNumber']} - {prop.get('Property Address', 'N/A')}, {prop.get('City', 'N/A')}, {prop.get('State', 'N/A')}")
+                else:
+                    print(f"{i+1}. Stock# {prop['StockNumber']} - {prop.get('Property Address', 'N/A')}, {prop.get('City', 'N/A')}, {prop.get('State', 'N/A')}")
+            except KeyError:
+                print(f"{i+1}. Stock# {prop.get('StockNumber', 'Unknown')} - (Missing address information)")
         
         if len(properties) > 10:
             print(f"...and {len(properties) - 10} more properties")
@@ -721,29 +982,61 @@ def main():
             print("Invalid input. Please enter a numeric Stock Number.")
             return
         
+        # Get property details for display
+        property_data = analyzer.get_property_data(stock_number)
+        if not property_data:
+            print(f"Error: Property with Stock Number {stock_number} was not found in the dataset.")
+            return
+            
+        # Display property summary before analysis
+        property_location = f"{property_data.get('Property Address', '')}, {property_data.get('City', '')}, {property_data.get('State', '')} {property_data.get('Zip', '')}"
+        
+        if use_colors:
+            print(f"\n{Colors.BOLD}{Colors.GREEN}Property Selected:{Colors.ENDC}")
+            print(f"{Colors.BOLD}Location:{Colors.ENDC} {property_location}")
+            print(f"{Colors.BOLD}Price:{Colors.ENDC} ${property_data.get('For Sale Price', 'N/A')}")
+            print(f"{Colors.BOLD}Land Area:{Colors.ENDC} {property_data.get('Land Area (AC)', 'N/A')} acres")
+            print(f"{Colors.BOLD}Zoning:{Colors.ENDC} {property_data.get('Zoning', 'N/A')}")
+        else:
+            print(f"\nProperty Selected:")
+            print(f"Location: {property_location}")
+            print(f"Price: ${property_data.get('For Sale Price', 'N/A')}")
+            print(f"Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres")
+            print(f"Zoning: {property_data.get('Zoning', 'N/A')}")
+        
         # Run the analysis
         print(f"\nAnalyzing property with Stock Number {stock_number}...\n")
-        if analyzer.model == LLAMA_MODEL:
-            print("This analysis may take several minutes with the Llama 3 model.")
-            print("The system is working even if it appears to be inactive.")
-        else:
-            print("Using Claude model for analysis. This may take a few minutes.")
+        print("This analysis may take several minutes with the Llama 3 model.")
+        print("The system is working even if it appears to be inactive.")
         
-        result = analyzer.analyze_property(stock_number)
-        
-        print("\n==== PROPERTY ANALYSIS RESULT ====\n")
-        print(result)
-        
+        try:
+            result = analyzer.analyze_property(stock_number)
+            
+            # With our new TUI formatting, we don't need to print the result again
+            # as it's already handled in the analyze_property method
+            if not use_colors:
+                print("\n==== PROPERTY ANALYSIS RESULT ====\n")
+                print(result)
+                
+        except KeyError:
+            print(f"Error: Property with Stock Number {stock_number} was not found in the dataset.")
+            print("Please check the Stock Number and try again.")
+            
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"\nUnexpected error: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        
+        # Print error trace for detailed debugging if it's a serious error
+        import traceback
+        print("\nDetailed error information:")
+        traceback.print_exc()
+        
         print("\nTroubleshooting tips:")
-        print("1. Make sure your CSV file exists at DATA/master.csv")
-        if not use_anthropic_if_available():
-            print("2. Check that Ollama is running (run 'ollama serve' in a terminal)")
-            print("3. Make sure the Llama 3 model is available (run 'ollama pull llama3')")
-        else:
-            print("2. Verify your Anthropic API key is valid in the .env file")
-        print("3. Check your internet connection for web search functionality")
+        print("1. Make sure your CSV file exists at DATA/master.csv and has the correct format")
+        print("2. Check that Ollama is running (run 'ollama serve' in a terminal)")
+        print("3. Make sure the Llama 3 model is available (run 'ollama pull llama3')")
+        print("4. Check your internet connection for web search functionality")
+        print("5. If the problem persists, try running the startup.sh script again to reset the environment")
 
 if __name__ == "__main__":
     main()
