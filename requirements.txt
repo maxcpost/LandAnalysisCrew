@@ -1,0 +1,14 @@
+crewai>=0.28.0
+langchain>=0.0.267
+langchain-community>=0.0.13
+pandas>=2.0.0
+python-dotenv>=1.0.0
+litellm>=1.14.0
+duckduckgo-search>=3.9.0
+requests>=2.31.0
+
+# For Ollama model support (Llama 3 8B)
+ollama>=0.1.5
+
+# Optional: For alternative local models
+# gpt4all>=2.0.2 
