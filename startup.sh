@@ -80,19 +80,58 @@ kill_ollama() {
     
     if [[ $response =~ ^[Yy]$ ]]; then
       print_info "Stopping existing Ollama process..."
+      
+      # Try gentle termination first
       pkill ollama
       sleep 3
       
-      # Double-check if it's still running
+      # Check if process is still running
       if pgrep -x "ollama" > /dev/null; then
         print_warning "Ollama process is still running. Attempting to force stop..."
         pkill -9 ollama
         sleep 2
         
+        # If still running, give user options
         if pgrep -x "ollama" > /dev/null; then
           print_error "Could not stop the existing Ollama process."
-          print_info "Please manually stop any running Ollama processes and try again."
-          return 1
+          print_info "This could be because:"
+          print_info "1. The process is being used by another application"
+          print_info "2. You don't have permission to stop this process"
+          print_info "3. The process is in an inconsistent state"
+          
+          echo ""
+          print_info "You have the following options:"
+          echo "1) Continue with the existing Ollama process"
+          echo "2) Try to manually stop Ollama and then continue"
+          echo "3) Exit the script"
+          
+          read -p "Choose an option (1-3): " option
+          case $option in
+            1)
+              print_info "Continuing with the existing Ollama process."
+              print_warning "This might cause issues if the process is not functioning correctly."
+              return 0
+              ;;
+            2)
+              print_info "Please open a new terminal and run: 'sudo pkill -9 ollama'"
+              print_info "After stopping the process, press Enter to continue..."
+              read
+              
+              # Check again if process was stopped
+              if pgrep -x "ollama" > /dev/null; then
+                print_error "Ollama process is still running. Cannot continue safely."
+                return 1
+              else
+                print_success "Ollama process successfully stopped."
+                return 0
+              fi
+              ;;
+            *)
+              print_info "Exiting the script. Please restart after manually stopping Ollama."
+              print_info "You can stop Ollama with: 'sudo pkill -9 ollama'"
+              exit 1
+              ;;
+          esac
         fi
       fi
       
@@ -234,71 +273,125 @@ setup_ollama() {
   # Stop any existing Ollama process
   kill_ollama
   
-  # Start Ollama and download model if available
-  print_info "Starting Ollama service..."
-  ollama serve > /dev/null 2>&1 &
-  OLLAMA_PID=$!
-  
-  # Wait for Ollama to start with improved feedback
-  print_info "Waiting for Ollama service to start..."
-  max_wait=30  # Maximum wait time in seconds
-  wait_count=0
-  
-  while [ $wait_count -lt $max_wait ]; do
-    if ollama_running; then
-      print_success "Ollama service is running (PID: $OLLAMA_PID)"
-      break
-    fi
+  # Check if Ollama is already running
+  print_info "Setting up Ollama service..."
+  if ollama_running; then
+    print_success "Ollama service is already running"
+    # Get the PID for reference
+    OLLAMA_PID=$(pgrep -x "ollama")
+    print_info "Using existing Ollama process (PID: $OLLAMA_PID)"
+  else
+    # Start a new Ollama process
+    print_info "Starting Ollama service..."
+    ollama serve > /dev/null 2>&1 &
+    OLLAMA_PID=$!
     
-    # Show progress
-    if [ $(($wait_count % 5)) -eq 0 ]; then
-      echo -n -e "\n   Still waiting... ($wait_count/$max_wait seconds)"
-    else
-      echo -n "."
-    fi
+    # Wait for Ollama to start with improved feedback
+    print_info "Waiting for Ollama service to start..."
+    max_wait=30  # Maximum wait time in seconds
+    wait_count=0
     
-    sleep 1
-    wait_count=$((wait_count + 1))
-  done
+    while [ $wait_count -lt $max_wait ]; do
+      if ollama_running; then
+        print_success "Ollama service is running (PID: $OLLAMA_PID)"
+        break
+      fi
+      
+      # Show progress
+      if [ $(($wait_count % 5)) -eq 0 ]; then
+        echo -n -e "\n   Still waiting... ($wait_count/$max_wait seconds)"
+      else
+        echo -n "."
+      fi
+      
+      sleep 1
+      wait_count=$((wait_count + 1))
+    done
+  fi
   
   # If Ollama is still not running after the wait period
   if ! ollama_running; then
-    print_error "Failed to start Ollama service after $max_wait seconds"
+    print_error "Failed to start Ollama service"
     print_info "Attempting to diagnose the issue..."
     
     # Check if process is still running
-    if ps -p $OLLAMA_PID > /dev/null; then
+    if ps -p $OLLAMA_PID > /dev/null 2>&1; then
       print_info "The Ollama process (PID: $OLLAMA_PID) is running but not responding to API requests."
+      print_info "This could be because:"
+      print_info "1. Another application is using port 11434"
+      print_info "2. The Ollama service is in a bad state"
     else
       print_info "The Ollama process is not running. It may have crashed on startup."
     fi
     
     # Check for common issues
-    if [ -f "/tmp/ollama.log" ]; then
-      print_info "Checking Ollama logs for errors..."
-      tail -n 20 /tmp/ollama.log
+    if command_exists lsof; then
+      print_info "Checking if another process is using Ollama's port (11434)..."
+      PORT_PROCESS=$(lsof -i :11434 | grep LISTEN)
+      if [ -n "$PORT_PROCESS" ]; then
+        print_info "Found process using port 11434:"
+        echo "$PORT_PROCESS"
+      fi
     fi
     
+    # Offer potential solutions
     print_info "Please try the following:"
-    print_info "1. Run 'ollama serve' manually in another terminal to see any error messages"
-    print_info "2. Check if another process is using port 11434: 'lsof -i :11434'"
-    print_info "3. Restart your computer and try again"
-    exit 1
+    echo "1) Manually start Ollama in another terminal: 'ollama serve'"
+    echo "2) Check if another Ollama instance is already running: 'ps aux | grep ollama'"
+    echo "3) Restart your computer and try again"
+    
+    # Ask if they want to try running without restarting
+    read -p "Do you want to try continuing anyway? (not recommended) [y/N]: " continue_anyway
+    
+    if [[ ! $continue_anyway =~ ^[Yy]$ ]]; then
+      print_info "Exiting setup. Please fix the Ollama issues and try again."
+      exit 1
+    else
+      print_warning "Continuing without a confirmed working Ollama service."
+      print_info "The application may not function correctly!"
+    fi
   fi
   
-  # Check and download Llama 3 model
-  print_info "Checking Llama 3 model..."
-  if model_exists "llama3:8b"; then
-    print_success "Llama 3 8B model is already available"
+  # Check and download Llama 3.3 model
+  print_info "Checking Llama 3.3 70B model..."
+  
+  # First verify that Ollama service is responding
+  if ! ollama_running; then
+    print_warning "Ollama service is not responding. Cannot verify model availability."
+    print_warning "The application might not work correctly if the model is not available."
+    print_info "You can manually check with 'ollama list' in another terminal."
+    
+    # Ask if they want to continue anyway
+    read -p "Do you want to continue without checking the model? [y/N]: " skip_model_check
+    if [[ ! $skip_model_check =~ ^[Yy]$ ]]; then
+      print_info "Exiting setup. Please ensure Ollama is running and try again."
+      exit 1
+    else
+      print_warning "Continuing without model verification. The application may fail later."
+      return 0
+    fi
+  fi
+  
+  # Check if model exists
+  MODEL_CHECK_RESULT=0
+  if ! ollama list 2>/dev/null | grep -q "llama3:70b"; then
+    print_info "Llama 3.3 70B model is not found. Need to download it."
+    MODEL_CHECK_RESULT=1
   else
-    # Check disk space before downloading - Llama 3 8B requires about 4GB
+    print_success "Llama 3.3 70B model is already available"
+    return 0
+  fi
+  
+  # Only proceed with download if model check indicates it's needed
+  if [ $MODEL_CHECK_RESULT -eq 1 ]; then
+    # Check disk space before downloading - Llama 3.3 70B requires about 45GB
     free_space=$(df -h . | awk 'NR==2 {print $4}')
     print_info "Disk space available: $free_space"
     
-    # Check if we have less than 5GB available (rough estimate)
-    if df -k . | awk 'NR==2 {exit ($4 < 5000000)}'; then
+    # Check if we have less than 50GB available (rough estimate)
+    if df -k . | awk 'NR==2 {exit ($4 < 50000000)}'; then
       print_warning "Low disk space might cause problems during model download."
-      print_info "Llama 3 8B requires approximately 4GB of disk space."
+      print_info "Llama 3.3 70B requires approximately 45GB of disk space."
       read -p "Continue with download anyway? [Y/n]: " response
       response=${response:-Y}  # Default to Y if empty
       
@@ -308,37 +401,77 @@ setup_ollama() {
       fi
     fi
     
-    print_info "Downloading Llama 3 8B model (this will take several minutes)..."
-    print_info "Download size: ~4GB. Please be patient and ensure a stable internet connection."
+    print_info "Downloading Llama 3.3 70B model (this will take a significant amount of time)..."
+    print_info "Download size: ~45GB. Please be patient and ensure a stable internet connection."
     
-    # Show a progress spinner during download
-    ollama pull llama3:8b & 
-    download_pid=$!
+    # Try the download with timeout and retry logic
+    MAX_RETRIES=2
+    RETRY_COUNT=0
+    DOWNLOAD_SUCCESS=false
     
-    spin='-\|/'
-    i=0
-    while kill -0 $download_pid 2>/dev/null; do
-      i=$(( (i+1) % 4 ))
-      printf "\r  Downloading... %s" "${spin:$i:1}"
-      sleep .5
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = "false" ]; do
+      # Show a progress spinner during download
+      (ollama pull llama3:70b > /dev/null 2>&1) & 
+      download_pid=$!
+      
+      spin='-\|/'
+      i=0
+      elapsed=0
+      timeout=3600  # 60 minutes timeout for large model
+      
+      while kill -0 $download_pid 2>/dev/null; do
+        i=$(( (i+1) % 4 ))
+        printf "\r  Downloading... %s (elapsed: %d seconds)" "${spin:$i:1}" $elapsed
+        sleep 1
+        elapsed=$((elapsed + 1))
+        
+        # Check for timeout
+        if [ $elapsed -gt $timeout ]; then
+          print_warning "Download is taking too long. Killing process..."
+          kill -9 $download_pid 2>/dev/null
+          break
+        fi
+      done
+      printf "\r                                                 \n"
+      
+      # Check if download completed successfully by waiting for process completion
+      wait $download_pid
+      download_status=$?
+      
+      if [ $download_status -eq 0 ] && ollama list 2>/dev/null | grep -q "llama3:70b"; then
+        print_success "Llama 3.3 70B model downloaded successfully!"
+        DOWNLOAD_SUCCESS=true
+      else
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+          print_warning "Download attempt $RETRY_COUNT failed. Retrying..."
+          sleep 3
+        fi
+      fi
     done
-    printf "\r                    \n"
     
-    # Check if download completed successfully
-    wait $download_pid
-    download_status=$?
-    
-    if [ $download_status -ne 0 ]; then
-      print_error "Failed to download Llama 3 model (error code: $download_status)"
+    if [ "$DOWNLOAD_SUCCESS" = "false" ]; then
+      print_error "Failed to download Llama 3.3 70B model after $MAX_RETRIES attempts"
       print_info "Common causes include:"
       print_info "1. Network connectivity issues"
       print_info "2. Insufficient disk space"
       print_info "3. Ollama service interrupted"
       print_info ""
-      print_info "You can try manually downloading with: ollama pull llama3:8b"
-      exit 1
-    else
-      print_success "Llama 3 8B model downloaded successfully!"
+      print_info "Options:"
+      echo "1) Continue without the model (application will likely fail)"
+      echo "2) Exit and try again later"
+      
+      read -p "Choose an option (1-2): " option
+      if [ "$option" = "1" ]; then
+        print_warning "Continuing without the required model. The application will likely fail."
+        return 0
+      else
+        print_info "Exiting setup. Try again later with:"
+        print_info "  1. Better internet connection"
+        print_info "  2. More disk space"
+        print_info "  3. Or run 'ollama pull llama3:70b' manually before running this script"
+        exit 1
+      fi
     fi
   fi
   

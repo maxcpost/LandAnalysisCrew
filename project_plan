@@ -1,0 +1,500 @@
+# Property Analysis AI Agent Program Directions
+
+## Project Overview
+
+This document provides comprehensive direction for an AI agent program designed to analyze potential properties for a high-density, master-planned community development project. The program will leverage CrewAI with Llama 3.3 70B to analyze property data from a CSV file and gather supplementary information from web searches to produce detailed property analysis reports.
+
+### Background Context
+
+Our company is developing master-planned communities featuring:
+- 80% high-quality manufactured homes
+- 15% apartment/condo homes
+- 5% traditional/"stick" built homes
+
+These communities will include various amenities (pools, gyms, pickleball courts), subscription services (housekeeping, landscaping, daycare, fitness training), and advanced technology integration to enhance resident satisfaction and quality of life.
+
+## Technical Specifications
+
+### Tech Stack
+- **Hardware**: Mac computer
+- **Model**: Llama 3.3 70B (locally served)
+- **Framework**: CrewAI for agent orchestration
+- **Data Source**: CSV file containing property listings and associated data
+- **Setup**: Automated setup.sh script for environment configuration and model deployment
+
+## Functional Requirements
+
+### 1. User Interaction
+- The program should prompt the user to select a property for analysis by entering the "Stock#" from the CSV file
+- Provide a clear interface for initiating analysis and displaying results
+
+### 2. Data Processing
+- Load and parse the provided CSV file containing property listings
+- Extract all relevant data for the selected property (identified by Stock#)
+- Handle different data types appropriately (numerical, categorical, geographical)
+- Process demographic data at multiple radius points (3-mile, 5-mile, 10-mile)
+- Calculate growth trends and comparative metrics across time periods (2020-2024-2029)
+- Normalize data where appropriate for meaningful comparisons
+- Integrate market analysis scores and rankings into the assessment
+
+### 3. Agent Crew Structure
+The CrewAI framework should implement the following specialized agents with Llama 3.3 70B as the foundation model:
+
+#### a. Data Analysis Agent
+- **Primary Function**: Analyze raw property data from the CSV
+- **Responsibilities**:
+  - Extract key property metrics (price, size, location, zoning)
+  - Analyze flood data for risk assessment (SFHA status, FEMA zones)
+  - Evaluate demographic information across multiple radii:
+    - Population growth trends (2020-2024-2029)
+    - Age distribution analysis (identifying high concentrations of working-age adults)
+    - Income level assessment (median and average household income projections)
+    - Education and disability statistics relevance
+  - Assess housing market indicators:
+    - Home value distributions and projections
+    - Rental market metrics (median/average gross rent)
+    - Occupancy and vacancy rates
+    - Housing unit growth trends
+    - Mobile home prevalence
+  - Calculate property affordability ratios relative to local income levels
+  - Analyze proximity services (Walmart, Hospital, Park) for convenience assessment
+  - Interpret market analysis scores and percentile rankings
+  - Identify potential red flags or special opportunities
+  - Calculate potential ROI based on company's mixed-housing development model
+  - Produce standardized data summary with key insights
+
+#### b. Web Research Agent
+- **Primary Function**: Gather external information about the property's location
+- **Responsibilities**:
+  - Research local economic development news with specific focus on:
+    - Major employer expansions or relocations (manufacturing, technology, services)
+    - Infrastructure projects (roads, utilities, public transit)
+    - Commercial development (retail, dining, entertainment)
+  - Investigate housing-specific topics:
+    - Local housing crisis severity assessment
+    - Affordable housing initiatives and success rates
+    - Public funding or grants available for housing development
+    - Recent housing developments and their reception
+    - Manufactured housing acceptance and regulations
+  - Assess government and regulatory environment:
+    - Local government attitude toward development
+    - Zoning changes or updates affecting residential development
+    - Permitting process efficiency and challenges
+    - Development incentives or tax benefits available
+  - Explore community factors:
+    - School quality and educational opportunities
+    - Crime statistics and safety perception
+    - Community amenities and quality of life indicators
+    - Local sentiment toward growth and development
+    - Neighborhood reputation and desirability
+  - Identify potential partnership opportunities:
+    - Local employers seeking workforce housing
+    - Educational institutions with housing needs
+    - Non-profit organizations with aligned missions
+    - Healthcare providers seeking proximity housing
+  - Document all findings with:
+    - Appropriate citations and sources
+    - Date of information retrieval
+    - Credibility assessment of sources
+    - Confidence level in findings
+
+#### c. Market Analysis Agent
+- **Primary Function**: Evaluate market suitability for the planned community
+- **Responsibilities**:
+  - Assess demand for different housing types based on:
+    - Current home value distributions across price ranges
+    - Projected housing value trends (2024-2029)
+    - Rental vs. ownership patterns
+    - Mobile home prevalence and acceptance
+  - Analyze fit for the company's 80/15/5 housing mix (manufactured/apartment/traditional)
+  - Evaluate local market competition using:
+    - Market Saturation scores and percentiles
+    - Vacancy rates (owner and rental)
+    - Housing unit growth percentages
+  - Analyze population growth projections for sustainable demand
+  - Identify demographic alignment with target resident profiles:
+    - Age distribution (working families, retirees)
+    - Income levels relative to housing costs
+    - Household size patterns
+  - Assess optimal pricing strategies based on:
+    - Home and Rent Affordability scores
+    - Income projections (2024-2029)
+    - Existing home value distributions
+  - Evaluate potential for amenity utilization based on:
+    - Age demographics (pool, gym, pickleball)
+    - Household composition (daycare services)
+    - Income levels (subscription service viability)
+    - Existing proximity services (competitive advantage assessment)
+
+#### d. Report Generation Agent
+- **Primary Function**: Compile findings into a comprehensive report
+- **Responsibilities**:
+  - Integrate findings from all other agents into a cohesive narrative
+  - Generate executive summary highlighting:
+    - Overall property suitability score (1-10)
+    - Top 3 strengths of the property for development
+    - Top 3 concerns or challenges
+    - Clear acquisition recommendation (Highly Recommended, Recommended, Consider with Conditions, Not Recommended)
+    
+  - Create data visualizations for critical metrics:
+    - Population growth trends chart (2000-2029)
+    - Income distribution graphs with projected changes
+    - Housing value distribution pie charts
+    - Age demographic breakdown with implications for amenities
+    - Radar charts for market analysis scores
+    - GIS-style heat maps for relevant metrics (if possible)
+    
+  - Develop comparative visualizations:
+    - Property metrics vs. market averages
+    - Current vs. projected demographic shifts
+    - Affordability metrics compared to company targets
+    
+  - Financial analysis presentation:
+    - Development cost estimates based on company's housing mix
+    - Revenue projections based on local market data
+    - ROI scenarios (conservative, moderate, optimistic)
+    - Breakeven analysis and timeline projections
+    
+  - Format report with:
+    - Clear section hierarchy and navigation
+    - Executive-friendly dashboard of key metrics
+    - Detailed data tables in appendices
+    - Visually distinct recommendation sections
+    
+  - Quality assurance:
+    - Include methodology explanations for all analyses
+    - Highlight confidence levels for projections and recommendations
+    - Clearly distinguish factual data from inferences
+    - Provide specific reasoning for all recommendations
+    - Include complete references for all external information
+
+### 4. Web Search Capabilities
+
+Implement robust web search functionality through Python libraries that can access search engines.
+
+#### Search Focus Areas
+The WebResearchTool should be used to gather current information on:
+
+1. **Local Economic Development**
+   - News about business expansion or contraction
+   - Employment statistics and job growth
+   - Major development projects
+   - Economic diversification initiatives
+
+2. **Housing Market Analysis**
+   - Local housing initiatives and challenges
+   - Affordable housing programs
+   - Housing shortage statistics and impacts
+   - Recent development projects and reception
+   - Manufactured housing regulations and acceptance
+
+3. **Infrastructure and Services**
+   - Transportation development (roads, public transit)
+   - Utility infrastructure capacity and expansion plans
+   - Broadband and technology infrastructure
+   - Public service quality (schools, emergency services)
+
+4. **Government and Policy**
+   - Local government policies regarding development
+   - Zoning changes and updates
+   - Development incentives
+   - Permitting process efficiency
+   - Environmental regulations affecting development
+
+5. **Community Factors**
+   - Quality of life indicators
+   - Crime statistics and trends
+   - School performance metrics
+   - Community sentiment toward growth
+   - Recreational and cultural amenities
+
+#### Search Implementation Guidelines
+
+- **Search Construction**:
+  - Use the property's city and county in search queries
+  - Include specific timeframes for relevance (e.g., "last 2 years")
+  - Construct targeted searches rather than broad queries
+  - Use multiple search variations to ensure comprehensive results
+
+- **Source Evaluation**:
+  - Prioritize local news sources, government sites, and reputable real estate resources
+  - Assess source credibility before including information
+  - Verify information across multiple sources when possible
+  - Note publication dates to establish information recency
+
+- **Result Processing**:
+  - Extract key points rather than full articles
+  - Summarize findings in standardized format
+  - Maintain proper attribution with URLs and publication dates
+  - Assign confidence ratings to information (High, Medium, Low)
+
+- **Ethical Considerations**:
+  - Respect website terms of service and robots.txt directives
+  - Implement appropriate rate limiting to avoid overloading sites
+  - Do not attempt to bypass paywalls or access restricted content
+  - Store only essential information needed for analysis
+
+### 5. Report Generation
+The final report should include:
+
+- **Executive Summary**: 
+  - Overall property assessment with recommendation
+  - Composite score interpretation
+  - Key strengths and concerns
+
+- **Property Profile**:
+  - Basic property details (location, size, price, zoning)
+  - Environmental assessment (flood risk analysis)
+  - Proximity services evaluation
+
+- **Demographic Analysis**:
+  - Population trends visualization (historical and projected)
+  - Age distribution breakdown with implications for community amenities
+  - Income distribution analysis with affordability assessment
+  - Educational and disability statistics relevance
+
+- **Housing Market Analysis**:
+  - Current home value distribution across price ranges
+  - Projected housing value trends (2024-2029)
+  - Rental market assessment
+  - Housing stock characteristics (occupancy, vacancy, mobile homes)
+  - Market scores interpretation (Home Affordability, Rent Affordability, Market Saturation)
+
+- **Economic Outlook**: 
+  - Income trend projections
+  - Web research findings on local economic development
+  - Employment trends and major employers
+  - Housing affordability relative to local incomes
+
+- **Development Opportunity Assessment**:
+  - Fit analysis for 80/15/5 housing mix model
+  - Potential resident demographic profiles
+  - Amenity and service viability analysis
+  - Competitive advantage assessment
+
+- **Risk Assessment**:
+  - Market saturation concerns
+  - Demographic shifts risks
+  - Environmental considerations
+  - Economic stability factors
+  - Regulatory/zoning challenges
+
+- **Financial Projection**:
+  - Estimated development costs
+  - Revenue potential based on local market
+  - Projected ROI scenarios
+  - Timeline considerations
+
+- **Strategic Recommendations**:
+  - Clear guidance on property acquisition suitability
+  - Optimal housing mix adjustments (if needed)
+  - Priority amenities for target demographics
+  - Development phasing strategy
+  - Risk mitigation approaches
+
+- **Appendices**:
+  - Detailed data tables
+  - Methodology notes
+  - Sources and citations for web research
+  - Comparative analysis with similar developments
+
+## Setup Instructions
+
+### 1. Environment Setup Script (setup.sh)
+The setup.sh file should do the following tasks...
+- Create a Python virtual environment
+- Install all required dependencies (CrewAI, data processing libraries, Llama model support)
+- Download and configure the Llama 3.3 70B model optimized for Mac
+- Set up the configuration files for the model server
+- Create skeleton files for the main application
+- Create a convenient startup script
+- Verify that all components are functioning correctly
+
+The script itself should look something like this...
+(note that this is a simple starting point for the startup.sh file)
+
+```bash
+#!/bin/bash
+# Setup script for Property Analysis AI Agent
+
+# Display welcome message
+echo "Setting up Property Analysis AI Agent System..."
+echo "This script will configure the environment, download necessary models, and prepare the system."
+
+# Create and activate virtual environment
+echo "Creating Python virtual environment..."
+python -m venv property_analysis_env
+source property_analysis_env/bin/activate
+
+# Install dependencies
+echo "Installing required packages..."
+pip install --upgrade pip
+pip install crewai pandas matplotlib seaborn plotly tqdm requests beautifulsoup4 torch transformers huggingface_hub 
+pip install llama-cpp-python langchain langchainhub pydantic fastapi uvicorn
+
+# Setup for Llama 3.3 70B
+echo "Preparing to download and configure Llama 3.3 70B model..."
+mkdir -p models
+cd models
+
+# Download model with appropriate quantization for Mac
+echo "Downloading Llama 3.3 70B model (this may take some time)..."
+# For Apple Silicon Mac
+if [[ $(uname -m) == 'arm64' ]]; then
+    # Download GGUF model optimized for Metal on Apple Silicon
+    curl -L https://huggingface.co/TheBloke/Llama-3-70B-Chat-GGUF/resolve/main/llama-3-70b-chat.Q4_K_M.gguf -o llama-3-70b.gguf
+else
+    # For Intel Mac
+    curl -L https://huggingface.co/TheBloke/Llama-3-70B-Chat-GGUF/resolve/main/llama-3-70b-chat.Q5_K_M.gguf -o llama-3-70b.gguf
+fi
+
+cd ..
+
+# Create configuration files
+echo "Creating configuration files..."
+mkdir -p config
+cat > config/model_config.json << EOF
+{
+    "model_path": "models/llama-3-70b.gguf",
+    "n_ctx": 8192,
+    "n_batch": 512,
+    "n_gpu_layers": -1,
+    "n_threads": 8
+}
+EOF
+
+# Create main application script
+echo "Creating main application script..."
+cat > run_analysis.py << EOF
+#!/usr/bin/env python3
+# Property Analysis AI Agent System
+
+import os
+import pandas as pd
+from crewai import Crew, Agent, Task
+import json
+
+# Load configuration
+with open('config/model_config.json', 'r') as f:
+    model_config = json.load(f)
+
+# Initialize model server
+print("Starting Llama 3.3 70B model server...")
+from llama_cpp import Llama
+llm = Llama(
+    model_path=model_config["model_path"],
+    n_ctx=model_config["n_ctx"],
+    n_batch=model_config["n_batch"],
+    n_gpu_layers=model_config["n_gpu_layers"],
+    n_threads=model_config["n_threads"]
+)
+
+# Agent definitions will go here
+# Data Analysis Agent, Web Research Agent, Market Analysis Agent, Report Generation Agent
+
+# Set up the crew
+# Crew configuration and execution logic
+
+# Main function to start the analysis
+def main():
+    print("Property Analysis AI Agent System")
+    # User interface logic to select property by Stock#
+
+if __name__ == "__main__":
+    main()
+EOF
+
+# Make run script executable
+chmod +x run_analysis.py
+
+# Create a startup script
+cat > start_analysis.sh << EOF
+#!/bin/bash
+source property_analysis_env/bin/activate
+python run_analysis.py
+EOF
+
+chmod +x start_analysis.sh
+
+# Verify installation
+echo "Verifying installation..."
+source property_analysis_env/bin/activate
+python -c "import crewai; import pandas; import llama_cpp; print('All required packages are installed correctly!')"
+
+echo "Setup complete! You can now run './start_analysis.sh' to begin property analysis."
+```
+
+### 2. Execution Flow
+- User runs setup.sh to prepare the environment
+- User launches the main program
+- Program prompts for property selection (Stock#)
+- Agent crew performs analysis
+- Report is generated and presented to the user
+
+## Data Structure
+
+The CSV contains comprehensive property data with the following key categories:
+
+### Property Information
+- **Identifiers**: Stock Number, Property ID
+- **Location**: Property Address, City, State, Zip, Latitude, Longitude, County Name
+- **Property Details**: Land Area (AC), Zoning, Proposed Land Use
+- **Pricing**: For Sale Price, Last Sale Price, Last Sale Date
+- **Ownership**: Owner Name, Sale Company details (Name, Contact, Phone, Fax)
+
+### Environmental Assessment
+- **Flood Risk**: In SFHA (Special Flood Hazard Area), FEMA Flood Zone, FEMA Map Date, Floodplain Area
+
+### Demographic Data (at 3-mile, 5-mile, and 10-mile radii)
+- **Population Metrics**:
+  - Historical (2000, 2020) and Projected (2024, 2029) population counts
+  - Population growth percentages (2020-2024, 2024-2029)
+  - Age distribution (0-4, 5-9, 10-14, 15-19, 20-24, 25-34, 35-44, 45-54, 55-59, 60-64, 65-74, 75-84, 85+)
+  - Educational enrollment (Kindergarten, Elementary, High School, College)
+  - Disability statistics (Under 18, 18-64, Over 65)
+
+### Economic Indicators (at 3-mile, 5-mile, and 10-mile radii)
+- **Income Data**:
+  - Median Household Income (2020, 2024, 2029)
+  - Average Household Income (2024, 2029)
+  - Household Income distribution brackets
+
+### Housing Market Data (at 3-mile, 5-mile, and 10-mile radii)
+- **Home Values**:
+  - Distribution across price ranges ($100K-$200K, $200K-$300K, etc.)
+  - Median Home Value (2024, 2029)
+  - Housing unit growth percentages
+
+- **Housing Stock**:
+  - Total Housing Units
+  - Occupancy metrics (Owner Occupied, Renter Occupied)
+  - Vacancy rates (For Sale, For Rent, Seasonal)
+  - Mobile Homes statistics
+  - Average household size (Owner vs. Renter)
+
+- **Rental Market**:
+  - Median Gross Rent
+  - Average Gross Rent
+  
+### Proximity Services
+- **Nearby Amenities**: 
+  - Walmart (Address, Distance in Miles, Travel Time)
+  - Hospital (Address, Distance in Miles, Travel Time)
+  - Park (Address, Distance in Miles, Travel Time)
+
+### Market Analysis Scores
+- **Affordability Metrics**: Home Affordability, Rent Affordability
+- **Location Metrics**: Convenience Index, Population Access, Market Saturation
+- **Overall Assessment**: Composite Score
+- **Ranking Data**: Percentile rankings for each metric category
+
+## Success Criteria
+
+The program will be considered successful if it can:
+1. Correctly extract and analyze property data from the CSV
+2. Gather relevant supplementary information from the web
+3. Generate insightful analysis that goes beyond the raw data
+4. Present findings in a clear, actionable report format
+5. Operate with minimal user intervention beyond property selection
+6. Provide consistent, reliable performance across different property types
+7. Complete the entire analysis process within a reasonable timeframe

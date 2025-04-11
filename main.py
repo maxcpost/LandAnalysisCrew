@@ -1,7 +1,6 @@
 from crewai import Agent, Task, Crew, Process
-from crewai.callbacks import CrewCallbackHandler, TaskCallbackHandler, AgentCallbackHandler
-from langchain_community.tools import DuckDuckGoSearchRun
 import pandas as pd
+import numpy as np
 import os
 from dotenv import load_dotenv
 import subprocess
@@ -14,17 +13,39 @@ import textwrap
 import json
 from typing import Any, Dict, List, Optional, Union
 
+# Visualization libraries (for Report Generation Agent)
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+
+# Import enhanced web research tool
+from enhanced_web_research import WebResearchTool, EnhancedWebResearchTool
+
 # Load environment variables
 load_dotenv()
 
-# Configure LiteLLM for debugging
-import litellm
-litellm._turn_on_debug()
+# Constants
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "llama3:70b"  # Using Llama 3.3 70B model
+CREW_TEMPERATURE = 0.1  # Lower temperature for more focused, deterministic responses
 
-# Default to Llama 3 8B model via Ollama
-LLAMA_MODEL = "meta-llama/Meta-Llama-3-8B"
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
-CREW_TEMPERATURE = float(os.getenv("CREW_TEMPERATURE", 0.5))
+# This is the key issue - litellm needs the provider prefix
+# Using two separate constants: one for CrewAI (prefixed) and one for Ollama API (just model name)
+LITELLM_MODEL = f"ollama/{OLLAMA_MODEL}"  # With required provider prefix for LiteLLM
+
+# Force disable any potential Anthropic or OpenAI API usage
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
+
+# Make sure we're using local models only
+os.environ["CREWAI_LOCAL_MODEL"] = "true"
+os.environ["CREWAI_FORCE_LOCAL"] = "true"
+os.environ["CREWAI_LLM"] = "ollama"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+os.environ["LANGCHAIN_ENDPOINT"] = ""
+os.environ["LANGCHAIN_API_KEY"] = ""
+os.environ["LANGCHAIN_PROJECT"] = ""
 
 # Terminal colors for better formatting
 class Colors:
@@ -39,150 +60,51 @@ class Colors:
     UNDERLINE = '\033[4m'
     GRAY = '\033[90m'
 
-# Custom callback handler for improved TUI
-class ChatTUICallbackHandler(CrewCallbackHandler):
-    def __init__(self):
-        super().__init__()
-        self.task_index = 1
-        self.agent_colors = {
-            "Property Data Analyst": Colors.BLUE,
-            "Housing & Economic Research Specialist": Colors.GREEN,
-            "Attainable Housing Financial Analyst": Colors.YELLOW,
-            "Attainable Housing Development Strategist": Colors.CYAN
-        }
-        # Print a header for the conversation
-        self._print_header("PROPERTY ANALYSIS CREW - INTERACTIVE SESSION")
-        print(f"\n{Colors.GRAY}Starting the analysis process with specialized agents...{Colors.ENDC}\n")
-    
-    def _print_header(self, text):
-        width = min(os.get_terminal_size().columns, 80)
-        print("\n" + "=" * width)
-        print(f"{Colors.BOLD}{Colors.HEADER}{text.center(width)}{Colors.ENDC}")
-        print("=" * width)
-    
-    def _print_subheader(self, text):
-        width = min(os.get_terminal_size().columns, 80)
-        print("\n" + "-" * width)
-        print(f"{Colors.BOLD}{text.center(width)}{Colors.ENDC}")
-        print("-" * width)
-    
-    def _wrap_text(self, text, initial_indent="", subsequent_indent="  "):
-        width = min(os.get_terminal_size().columns, 80) - len(initial_indent)
-        wrapped_text = textwrap.fill(
-            text,
-            width=width,
-            initial_indent=initial_indent,
-            subsequent_indent=subsequent_indent
-        )
-        return wrapped_text
-    
-    def _format_tool_use(self, tool_name, input_data):
-        # Format tool usage in a more compact and readable way
-        if isinstance(input_data, dict):
-            try:
-                formatted_input = json.dumps(input_data, indent=2)
-                return f"{Colors.GRAY}[Using {tool_name}]\n{formatted_input}{Colors.ENDC}"
-            except:
-                return f"{Colors.GRAY}[Using {tool_name}]{Colors.ENDC}"
-        else:
-            return f"{Colors.GRAY}[Using {tool_name}: {input_data}]{Colors.ENDC}"
-    
-    def on_crew_start(self, crew: Any) -> None:
-        pass
-    
-    def on_crew_end(self, crew: Any, result: str) -> None:
-        self._print_header("ANALYSIS COMPLETE")
-    
-    def on_task_start(self, task: Any) -> None:
-        agent_role = task.agent.role
-        color = self.agent_colors.get(agent_role, Colors.BOLD)
+# Since we can't use the callback system, we'll create simpler formatting functions
+def print_header(text):
+    """Print a formatted header."""
+    if not supports_color():
+        print(f"\n===== {text} =====")
+        return
         
-        self._print_subheader(f"TASK {self.task_index}: {task.description.split('CRITICAL')[0].strip()}")
-        print(f"\n{color}👤 {agent_role}{Colors.ENDC} is working on this task...\n")
-        self.task_index += 1
-    
-    def on_task_end(self, task: Any, output: str) -> None:
-        agent_role = task.agent.role
-        color = self.agent_colors.get(agent_role, Colors.BOLD)
+    width = min(os.get_terminal_size().columns, 80)
+    print("\n" + "=" * width)
+    print(f"{Colors.BOLD}{Colors.HEADER}{text.center(width)}{Colors.ENDC}")
+    print("=" * width)
+
+def print_subheader(text):
+    """Print a formatted subheader."""
+    if not supports_color():
+        print(f"\n----- {text} -----")
+        return
         
-        print(f"\n{color}✅ {agent_role} has completed their analysis.{Colors.ENDC}\n")
-    
-    def on_agent_start(self, agent: Any) -> None:
-        pass
-    
-    def on_agent_end(self, agent: Any) -> None:
-        pass
-    
-    def on_agent_message(self, agent: Any, message: str) -> None:
-        color = self.agent_colors.get(agent.role, Colors.BOLD)
+    width = min(os.get_terminal_size().columns, 80)
+    print("\n" + "-" * width)
+    print(f"{Colors.BOLD}{text.center(width)}{Colors.ENDC}")
+    print("-" * width)
+
+def print_agent(role, message, color=None):
+    """Print an agent message with proper formatting."""
+    if not supports_color():
+        print(f"\n[{role}]: {message}")
+        return
         
-        # Clean up the message - remove markdown formatting artifacts
-        message = re.sub(r'```json', '', message)
-        message = re.sub(r'```', '', message)
+    if color is None:
+        color = Colors.BOLD
         
-        # Format the message with the agent's color
-        formatted_message = self._wrap_text(
-            message, 
-            initial_indent=f"{color}💬 {agent.role}: {Colors.ENDC}",
-            subsequent_indent="   "
-        )
-        print(formatted_message)
-        print("")  # Add a blank line for readability
-    
-    def on_tool_start(self, agent: Any, tool: Any, input_data: Any) -> None:
-        color = self.agent_colors.get(agent.role, Colors.GRAY)
-        tool_name = getattr(tool, "name", str(tool))
-        
-        # Print a compact tool usage message
-        print(f"{color}🔧 {agent.role} is using {tool_name}...{Colors.ENDC}")
-    
-    def on_tool_end(self, agent: Any, tool: Any, input_data: Any, output: Any) -> None:
-        # We don't show the full tool output as it can be very verbose
-        # Just show a completion indicator
-        color = self.agent_colors.get(agent.role, Colors.GRAY)
-        tool_name = getattr(tool, "name", str(tool))
-        print(f"{color}✓ Tool {tool_name} completed{Colors.ENDC}")
-    
-    def on_agent_task_start(self, agent: Any, task: Any) -> None:
-        color = self.agent_colors.get(agent.role, Colors.BOLD)
-        print(f"{color}🔍 {agent.role} is analyzing the property data...{Colors.ENDC}")
-    
-    def on_agent_task_end(self, agent: Any, task: Any, output: str) -> None:
-        pass
-    
-    def on_subtask_start(self, subtask: Any, agent: Any) -> None:
-        pass
-    
-    def on_subtask_end(self, subtask: Any, agent: Any, output: str) -> None:
-        pass
-    
-    # Implement other callbacks as needed
-    def on_chain_start(self, *args, **kwargs) -> None:
-        pass
-    
-    def on_chain_end(self, *args, **kwargs) -> None:
-        pass
-    
-    def on_tool_error(self, *args, **kwargs) -> None:
-        print(f"{Colors.RED}Error during tool execution{Colors.ENDC}")
-    
-    def on_text(self, text: str) -> None:
-        pass
-    
-    def on_llm_start(self, *args, **kwargs) -> None:
-        pass
-    
-    def on_llm_end(self, *args, **kwargs) -> None:
-        pass
-    
-    def on_llm_error(self, *args, **kwargs) -> None:
-        print(f"{Colors.RED}Error during LLM processing{Colors.ENDC}")
-        
-    def on_tool_chain_start(self, *args, **kwargs) -> None:
-        pass
-    
-    def on_tool_chain_end(self, *args, **kwargs) -> None:
-        pass
+    width = min(os.get_terminal_size().columns, 80)
+    wrapped_text = textwrap.fill(
+        message, 
+        width=width - 4,
+        initial_indent=f"{color}💬 {role}: {Colors.ENDC}",
+        subsequent_indent="   "
+    )
+    print(wrapped_text)
+    print("")  # Add a blank line for readability
+
+def print_task(task_num, task_name):
+    """Print a task header."""
+    print_subheader(f"TASK {task_num}: {task_name}")
 
 # Function to check if a terminal supports colors
 def supports_color():
@@ -215,30 +137,39 @@ def check_ollama_running():
         return False
 
 def setup_ollama_model():
-    """Setup Llama 3 model in Ollama"""
+    """Ensure Ollama model is available"""
     try:
-        print("Checking if Llama 3 model is available in Ollama...")
-        result = subprocess.run(["ollama", "list"], 
-                              stdout=subprocess.PIPE, 
-                              stderr=subprocess.PIPE, 
-                              text=True)
+        # Force LangChain and CrewAI to use local models only
+        os.environ["CREWAI_LOCAL_MODEL"] = "true" 
+        os.environ["CREWAI_FORCE_LOCAL"] = "true"
         
-        if "llama3" not in result.stdout:
-            print("Downloading Llama 3 model (this may take a few minutes the first time)...")
-            subprocess.run(["ollama", "pull", "llama3"], check=True)
-            print("Llama 3 model downloaded successfully!")
+        # Set model name and temperature
+        os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
+        
+        # Check if model is available
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags")
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            model_names = [model.get("name") for model in models]
+            
+            if OLLAMA_MODEL not in model_names:
+                print(f"\nDownloading {OLLAMA_MODEL} model, this may take several minutes (or even hours)...")
+                print(f"The model is approximately 45GB. Please be patient.")
+                pull_response = requests.post(
+                    f"{OLLAMA_BASE_URL}/api/pull",
+                    json={"name": OLLAMA_MODEL}
+                )
+                if pull_response.status_code != 200:
+                    print(f"Warning: Could not download {OLLAMA_MODEL} model.")
+                    print(f"Please run 'ollama pull {OLLAMA_MODEL}' manually.")
+            else:
+                print(f"\nModel {OLLAMA_MODEL} is already available.")
         else:
-            print("Llama 3 model is ready to use.")
-        
-        return True
-    except subprocess.SubprocessError as e:
-        print(f"Error setting up Ollama model: {e}")
-        return False
-
-def use_anthropic_if_available():
-    """Check if Anthropic API key is available"""
-    # Always return False to force using Ollama
-    return False
+            print("\nWarning: Could not check available models.")
+            print(f"Make sure Ollama is running on {OLLAMA_BASE_URL}")
+    except Exception as e:
+        print(f"\nError setting up Ollama model: {e}")
+        print("Continuing with Ollama anyway, but you may need to pull the model manually.")
 
 class PropertyAnalyzer:
     def __init__(self, csv_path="DATA/master.csv"):
@@ -254,7 +185,7 @@ class PropertyAnalyzer:
             self.data = pd.read_csv(csv_path)
             
             # Check for required columns
-            required_columns = ["StockNumber", "Property Address", "City", "State", "For Sale Price", "Land Area (AC)"]
+            required_columns = ["StockNumber", "Property Address", "City", "State"]
             missing_columns = [col for col in required_columns if col not in self.data.columns]
             
             if missing_columns:
@@ -267,590 +198,54 @@ class PropertyAnalyzer:
         except Exception as e:
             raise ValueError(f"Error loading CSV file: {e}")
         
-        # Try to initialize DuckDuckGo search tool, but handle exceptions
+        # Set up Ollama directly
         try:
-            self.search_tool = DuckDuckGoSearchRun()
-        except ImportError:
-            print("Warning: DuckDuckGo search package not available. Web search functionality will be limited.")
-            self.search_tool = None
-            
-        self.column_descriptions = self._get_column_descriptions()
+            from langchain.llms import Ollama
+            self.ollama_llm = Ollama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+            print(f"\nInitialized Ollama with model {OLLAMA_MODEL}")
+        except Exception as e:
+            print(f"Error initializing Ollama: {e}")
+            print("Continuing without Ollama model setup. This may cause issues later.")
         
-        # Always use Llama model if Ollama is installed and running
-        if check_ollama_installed() and check_ollama_running():
-            self.model = LLAMA_MODEL
-            setup_ollama_model()
-        else:
+        # Check if Ollama is running
+        if not check_ollama_running():
             print("\nOllama is not running. Please make sure Ollama is installed and running.")
             print("You can install Ollama from https://ollama.com/")
             print("Then start it with 'ollama serve' command in a separate terminal.")
             sys.exit(1)
-        
-    def _get_column_descriptions(self):
-        """Return descriptions for important data columns"""
-        return {
-            # Basic Property Information
-            "StockNumber": "Unique identifier for each property listing",
-            "Property Address": "Street address of the property",
-            "City": "City where the property is located",
-            "State": "State where the property is located",
-            "Zip": "ZIP/Postal code of the property location",
-            "For Sale Price": "The listing price of the property in USD",
-            "PropertyID": "Secondary identifier used in property management systems",
-            "Land Area (AC)": "Property area in acres - critical for development density calculations",
-            "Latitude": "Geographic coordinate (latitude) of the property",
-            "Longitude": "Geographic coordinate (longitude) of the property",
-            "Zoning": "Legal zoning classification that determines allowable development types",
-            "County Name": "The county where the property is located",
-            "Proposed Land Use": "Suggested or approved future use for the property",
             
-            # Ownership and Sales Information
-            "Owner Name": "Current owner of the property",
-            "Sale Company Name": "Real estate company handling the property sale",
-            "Sale Company Contact": "Contact person at the real estate company",
-            "Sale Company Phone": "Phone number for the real estate company",
-            "Sale Company Fax": "Fax number for the real estate company",
-            "Last Sale Date": "Date when the property was last sold",
-            "Last Sale Price": "Price at which the property was last sold in USD",
-            
-            # Flood Risk Information
-            "In SFHA": "Whether property is in Special Flood Hazard Area (Yes/No) - indicates flood risk",
-            "Fema Flood Zone": "FEMA-designated flood zone classification (e.g., A, AE, X) - details flood risk level",
-            "FEMA Map Date": "Date of the FEMA flood map used for flood zone determination",
-            "Floodplain Area": "Portion of the property within the designated floodplain (often in acres or %)",
-            
-            # Population Growth Metrics (Critical for Market Analysis)
-            "% Pop Grwth 2020-2024(5m)": "Percentage population growth within 5 miles (2020-2024) - Key indicator of recent area growth",
-            "% Pop Grwth 2024-2029(5m)": "Projected percentage population growth within 5 miles (2024-2029) - Forecasted future growth",
-            "% Pop Grwth 2020-2024(10m)": "Percentage population growth within 10 miles (2020-2024) - Broader area growth trend",
-            "% Pop Grwth 2024-2029(10m)": "Projected percentage population growth within 10 miles (2024-2029) - Broader future growth",
-            
-            # Population Data by Distance
-            "2000 Population(3m)": "Total population within 3 miles in 2000 - Historical benchmark",
-            "2020 Population(3m)": "Total population within 3 miles in 2020 - Recent census data",
-            "2024 Population(3m)": "Total population within 3 miles in 2024 - Current estimate",
-            "2029 Population(3m)": "Projected population within 3 miles in 2029 - Future forecast",
-            "2000 Population(5m)": "Total population within 5 miles in 2000 - Historical benchmark",
-            "2020 Population(5m)": "Total population within 5 miles in 2020 - Recent census data",
-            "2024 Population(5m)": "Total population within 5 miles in 2024 - Current estimate",
-            "2029 Population(5m)": "Projected population within 5 miles in 2029 - Future forecast",
-            "2000 Population(10m)": "Total population within 10 miles in 2000 - Historical benchmark for wider region",
-            "2020 Population(10m)": "Total population within 10 miles in 2020 - Recent census data for wider region",
-            "2024 Population(10m)": "Total population within 10 miles in 2024 - Current estimate for wider region",
-            "2029 Population(10m)": "Projected population within 10 miles in 2029 - Future forecast for wider region",
-            
-            # Income Data by Distance (Critical for Affordability Analysis)
-            "2020 Med HH Inc(3m)": "Median household income within 3 miles in 2020 - Recent benchmark",
-            "2024 Avg HH Inc(3m)": "Average household income within 3 miles in 2024 - Current mean income",
-            "2024 Med HH Inc(3m)": "Median household income within 3 miles in 2024 - Current middle income point",
-            "2029 Avg HH Inc(3m)": "Projected average household income within 3 miles in 2029 - Future forecast of mean income",
-            "2029 Med HH Inc(3m)": "Projected median household income within 3 miles in 2029 - Future middle income point",
-            "2020 Med HH Inc(5m)": "Median household income within 5 miles in 2020 - Recent benchmark",
-            "2024 Avg HH Inc(5m)": "Average household income within 5 miles in 2024 - Current mean income",
-            "2024 Med HH Inc(5m)": "Median household income within 5 miles in 2024 - Current middle income point, key for affordability analysis",
-            "2029 Avg HH Inc(5m)": "Projected average household income within 5 miles in 2029 - Future income prediction",
-            "2029 Med HH Inc(5m)": "Projected median household income within 5 miles in 2029 - Future middle income point",
-            
-            # Home Value Distribution Data (Price Brackets)
-            "2024 Median Home Value(3m)": "Median home value within 3 miles in 2024 - Current market benchmark",
-            "2029 Median HH Value(3m)": "Projected median home value within 3 miles in 2029 - Future market prediction",
-            "2024 Median Home Value(5m)": "Median home value within 5 miles in 2024 - Current market benchmark, crucial for price positioning",
-            "2029 Median HH Value(5m)": "Projected median home value within 5 miles in 2029 - Future market prediction",
-            "2024 Median Home Value(10m)": "Median home value within 10 miles in 2024 - Wider market context",
-            "2029 Median HH Value(10m)": "Projected median home value within 10 miles in 2029 - Future wider market",
-            
-            # Housing Unit Growth
-            "% HU Grwth 2020-2024(3m)": "Percentage growth in housing units within 3 miles (2020-2024) - Recent construction activity",
-            "% HU Grwth 2020-2024(5m)": "Percentage growth in housing units within 5 miles (2020-2024) - Area construction trends",
-            "% HU Grwth 2020-2024(10m)": "Percentage growth in housing units within 10 miles (2020-2024) - Regional construction trends",
-            
-            # Detailed Demographic Data by Distance (5-mile radius)
-            "TotPop_5": "Total population within 5 miles - Current population base",
-            "TotHHs_5": "Total households within 5 miles - Number of household units, important for market sizing",
-            "MedianHHInc_5": "Median household income within 5 miles - Middle income point, key for affordability",
-            "AvgHHInc_5": "Average household income within 5 miles - Mean income level",
-            "TotHUs_5": "Total housing units within 5 miles - Housing supply metric",
-            "OccHUs_5": "Occupied housing units within 5 miles - Indicates demand level",
-            "OwnerOcc_5": "Owner-occupied housing units within 5 miles - Ownership rate metric",
-            "RenterOcc_5": "Renter-occupied housing units within 5 miles - Rental market size",
-            "AvgOwnerHHSize_5": "Average owner household size within 5 miles - Typical family size of owners",
-            "AvgRenterHHSize_5": "Average renter household size within 5 miles - Typical family size of renters",
-            "VacHUs_5": "Vacant housing units within 5 miles - Key indicator of oversupply or seasonal area",
-            "VacantForSale_5": "Vacant units for sale within 5 miles - Direct competition metric",
-            "VacantForRent_5": "Vacant units for rent within 5 miles - Rental market vacancy",
-            "OwnerVacRate_5": "Owner vacancy rate within 5 miles - Percentage of for-sale homes vacant",
-            "RenterVacRate_5": "Renter vacancy rate within 5 miles - Percentage of rental units vacant, key market tightness indicator",
-            "MedianHValue_5": "Median home value within 5 miles - Middle price point of homes",
-            "MedianGrossRent_5": "Median gross rent within 5 miles - Middle price point for rentals",
-            "AvgGrossRent_5": "Average gross rent within 5 miles - Mean rental cost, important for investment analysis",
-            
-            # Nearby Amenities and Services (Critical for Development Appeal)
-            "Nearest_Walmart_Distance_Miles": "Distance to the nearest Walmart in miles - Retail convenience metric",
-            "Nearest_Walmart_Travel_Time_Minutes": "Travel time to the nearest Walmart in minutes - Accessibility metric",
-            "Nearest_Hospital_Distance_Miles": "Distance to the nearest hospital in miles - Healthcare access metric",
-            "Nearest_Hospital_Travel_Time_Minutes": "Travel time to the nearest hospital in minutes - Emergency service access",
-            "Nearest_Park_Distance_Miles": "Distance to the nearest park in miles - Recreation access metric",
-            "Nearest_Park_Travel_Time_Minutes": "Travel time to the nearest park in minutes - Lifestyle amenity access",
-            
-            # Composite Scoring Metrics (Critical for Overall Evaluation)
-            "Home_Affordability": "Score that measures property affordability relative to local incomes (higher is better) - Key for attainable housing viability",
-            "Rent_Affordability": "Score that measures rent affordability in the area (higher is better) - Indicates rental burden levels",
-            "Convenience_Index": "Score that measures proximity to amenities (higher is better) - Lifestyle and convenience factor",
-            "Population_Access": "Score that measures access to population centers (higher is better) - Market size potential",
-            "Market_Saturation": "Score that measures how saturated the market is (lower means less competition) - Competitive landscape metric",
-            "Composite_Score": "Overall score combining all factors (higher is better) - Summary metric of development potential",
-            
-            # Percentile Rankings (Relative Position Metrics)
-            "Home_Affordability Percentile": "Percentile ranking for home affordability (higher is better) - How this property compares to others",
-            "Rent_Affordability Percentile": "Percentile ranking for rent affordability (higher is better) - Relative position for rental stress",
-            "Convenience_Index Percentile": "Percentile ranking for convenience (higher is better) - Relative amenity access position",
-            "Population_Access Percentile": "Percentile ranking for population access (higher is better) - Relative market access position",
-            "Market_Saturation Percentile": "Percentile ranking for market saturation (higher is better) - Relative competition position",
-            "Composite_Score Percentile": "Percentile ranking for overall composite score (higher is better) - Overall relative position",
-            
-            # Additional Important Metrics for Housing Development
-            "InElementary_5": "Number of children enrolled in elementary school within 5 miles - Family demographic indicator",
-            "InHighSchool_5": "Number of children enrolled in high school within 5 miles - Teen demographic indicator",
-            "InCollege_5": "Number of people enrolled in college within 5 miles - Young adult demographic indicator",
-            "VacantSeasonal_5": "Vacant units for seasonal use within 5 miles - Indicator of vacation/second home market",
-            "MobileHomes_5": "Number of mobile homes within 5 miles - Alternative housing market indicator",
-            "MobileHomesPerK_5": "Mobile homes per 1,000 housing units within 5 miles - Affordable housing prevalence",
-            
-            # Home Value Brackets (Price Distribution)
-            "HvalUnder50_5": "Homes valued under $50,000 within 5 miles - Very low-cost housing count",
-            "Hval50_5": "Homes valued $50,000-$99,999 within 5 miles - Low-cost housing count",
-            "Hval100_5": "Homes valued $100,000-$149,999 within 5 miles - Moderate-low cost housing",
-            "Hval150_5": "Homes valued $150,000-$199,999 within 5 miles - Moderate cost housing",
-            "Hval200_5": "Homes valued $200,000-$299,999 within 5 miles - Moderate-high cost housing",
-            "Hval300_5": "Homes valued $300,000-$499,999 within 5 miles - High cost housing",
-            "Hval500_5": "Homes valued $500,000-$999,999 within 5 miles - Very high cost housing",
-            "HvalOverMillion_5": "Homes valued over $1,000,000 within 5 miles - Luxury housing count",
-        }
-        
     def get_property_data(self, stock_number):
         """Get all data for a specific property by stock number"""
         property_data = self.data[self.data['StockNumber'] == stock_number]
         if property_data.empty:
             return None
-        return property_data.iloc[0].to_dict()
+        
+        # Convert the data to a dictionary and handle missing values
+        property_dict = property_data.iloc[0].to_dict()
+        
+        # Convert numeric fields that might be missing or 'N/A' to appropriate values
+        for key, value in property_dict.items():
+            if pd.isna(value):
+                property_dict[key] = 'N/A'
+            elif isinstance(value, (int, float)) and 'Price' in key:
+                # Format prices with commas for readability
+                try:
+                    property_dict[key] = f"{value:,.2f}".rstrip('0').rstrip('.') if '.' in f"{value:,.2f}" else f"{value:,.0f}"
+                except:
+                    # Keep original value if formatting fails
+                    pass
+        
+        return property_dict
         
     def get_property_list(self):
         """Returns a list of all stock numbers and their addresses"""
         return self.data[['StockNumber', 'Property Address', 'City', 'State']].to_dict('records')
-        
-    def create_agents(self):
-        """Create specialized agents for property analysis"""
-        
-        # Set up tools
-        tools = []
-        if self.search_tool:
-            tools = [self.search_tool]
-        
-        # Data Analyst Agent analyzes the raw property data
-        data_analyst = Agent(
-            role="Property Data Analyst",
-            goal="Analyze property data to identify locations ideal for attainable housing developments and economic growth potential",
-            backstory="""You are an expert in real estate data analysis with years of experience 
-            interpreting property metrics and housing affordability indicators. You specialize in 
-            identifying areas experiencing both economic growth and housing affordability challenges. 
-            Your analysis helps development companies identify locations where attainable housing 
-            would meet critical market needs and support sustainable community growth. You have a 
-            deep understanding of the housing crisis affecting many communities and can recognize 
-            the data patterns that indicate where new attainable housing developments would be 
-            most impactful and welcomed by the community.""",
-            verbose=True,
-            allow_delegation=True,
-            tools=tools,
-            llm_model=self.model,
-            temperature=CREW_TEMPERATURE
-        )
-        
-        # Market Researcher Agent focuses on external market conditions
-        market_researcher = Agent(
-            role="Housing & Economic Research Specialist",
-            goal="Research local housing crisis indicators, economic growth, and community sentiment toward new attainable housing developments",
-            backstory="""You are a specialized researcher who excels at analyzing housing markets, 
-            economic development patterns, and community housing needs. You have extensive experience 
-            identifying areas experiencing housing affordability challenges alongside economic growth. 
-            You can recognize the signals that indicate where a large-scale attainable housing development 
-            would be welcomed and needed by the community. You know how to evaluate local government 
-            attitudes toward housing development and identify locations where new development is being 
-            actively encouraged to address housing shortages.""",
-            verbose=True,
-            allow_delegation=True,
-            tools=tools,
-            llm_model=self.model,
-            temperature=CREW_TEMPERATURE
-        )
-        
-        # Financial Analyst Agent handles financial analysis and projections
-        financial_analyst = Agent(
-            role="Attainable Housing Financial Analyst",
-            goal="Analyze financial feasibility of large-scale attainable housing developments and create compelling ROI projections",
-            backstory="""You are a financial expert specializing in affordable and attainable housing 
-            development economics. You understand the unique financial challenges and opportunities 
-            in creating housing that is both profitable for developers and attainable for residents. 
-            You have extensive experience with large-scale master-planned communities and can model 
-            complex financial projections for developments with 500+ homes. You know how to identify 
-            areas where the economics support attainable housing development and can calculate the 
-            optimal price points that balance affordability with developer profitability.""",
-            verbose=True,
-            allow_delegation=True,
-            tools=tools,
-            llm_model=self.model,
-            temperature=CREW_TEMPERATURE
-        )
-        
-        # Development Strategist Agent focuses on development recommendations
-        development_strategist = Agent(
-            role="Attainable Housing Development Strategist",
-            goal="Create strategic plans for attainable housing communities that address housing crises while ensuring developer success",
-            backstory="""You are a seasoned development strategist who specializes in attainable housing 
-            and master-planned communities. You have designed numerous successful developments that 
-            have addressed housing affordability challenges while creating vibrant, sustainable communities. 
-            You understand how to navigate local regulations, build community support, and design 
-            developments that meet both market needs and financial goals. You're skilled at identifying 
-            locations where economic growth and housing shortages intersect, creating optimal conditions 
-            for attainable housing development. You can recommend the right mix of housing types, 
-            amenities, and pricing strategies to ensure community success.""",
-            verbose=True,
-            allow_delegation=True,
-            tools=tools,
-            llm_model=self.model,
-            temperature=CREW_TEMPERATURE
-        )
-        
-        return {
-            "data_analyst": data_analyst,
-            "market_researcher": market_researcher,
-            "financial_analyst": financial_analyst,
-            "development_strategist": development_strategist
-        }
-    
-    def create_tasks(self, agents, property_data, property_location):
-        """Create tasks for the property analysis crew"""
-        
-        # Task for initial data analysis
-        data_analysis_task = Task(
-            description=f"""Analyze the key metrics for the property at {property_location} with special focus on 
-            housing affordability, economic growth, and potential for a large-scale attainable housing development.
-            
-            The property has the following key data:
-            - Price: ${property_data.get('For Sale Price', 'N/A')}
-            - Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres
-            - Zoning: {property_data.get('Zoning', 'N/A')}
-            - County: {property_data.get('County Name', 'N/A')}
-            - Proposed Use: {property_data.get('Proposed Land Use', 'N/A')}
-            
-            CRITICAL ANALYSIS POINTS FOR ATTAINABLE HOUSING DEVELOPMENT:
-            
-            1. Housing Affordability Analysis:
-               - Home Affordability Score: {property_data.get('Home_Affordability', 'N/A')}
-               - Rent Affordability Score: {property_data.get('Rent_Affordability', 'N/A')}
-               - 2024 Median Home Value (5mi): ${property_data.get('2024 Median Home Value(5m)', 'N/A')}
-               - 2024 Median HH Income (5mi): ${property_data.get('2024 Med HH Inc(5m)', 'N/A')}
-               - Calculate the income-to-home price ratio to identify affordability gaps
-               - Analyze if the location shows signs of a housing crisis (supply/demand imbalance)
-            
-            2. Economic Growth Indicators:
-               - Population Growth (5mi): {property_data.get('% Pop Grwth 2020-2024(5m)', 'N/A')}% (2020-2024)
-               - Projected Growth (5mi): {property_data.get('% Pop Grwth 2024-2029(5m)', 'N/A')}% (2024-2029)
-               - 2024 Population (5mi): {property_data.get('2024 Population(5m)', 'N/A')}
-               - Job growth trends and employment opportunities
-               - Analyze if the area is experiencing economic expansion or new business activity
-            
-            3. Master-Planned Community Feasibility:
-               - Assess if the {property_data.get('Land Area (AC)', 'N/A')} acres is sufficient for 500+ homes
-               - Convenience Index: {property_data.get('Convenience_Index', 'N/A')}
-               - Population Access: {property_data.get('Population_Access', 'N/A')}
-               - Evaluate infrastructure readiness for large-scale development
-               - Analyze if local amenities support a master-planned community
-            
-            4. Community Need Assessment:
-               - Assess the housing supply gap in the area
-               - Evaluate if there are signs of local support for new housing developments
-               - Analyze whether attainable housing aligns with local community needs
-               - Look for evidence of housing shortages or affordability crises
-            
-            Identify at least 8 key insights from this data and explain their significance for an attainable 
-            housing development of 500+ homes. Focus particularly on metrics that indicate both economic 
-            growth AND housing affordability challenges.
-            
-            Column Descriptions:
-            {self.column_descriptions}
-            """,
-            agent=agents["data_analyst"],
-            expected_output="A detailed analysis of the property's potential for attainable housing development with at least 8 key insights"
-        )
-        
-        # Task for market research
-        market_research_task = Task(
-            description=f"""Research the local housing market conditions, economic growth patterns, 
-            development activities, and COMMUNITY SENTIMENT toward attainable housing for 
-            {property_location} ({property_data.get('County Name', 'N/A')} County).
-            
-            CRITICAL RESEARCH AREAS:
-            
-            1. Housing Crisis Assessment:
-               - Evidence of housing shortages in the area
-               - News articles about housing affordability challenges
-               - Local reporting on homelessness or housing insecurity
-               - Rental vacancy rates and housing supply metrics
-               - Government declarations regarding housing emergencies
-            
-            2. Economic Development:
-               - Recent or planned major developments in the area
-               - Economic growth initiatives or business expansion
-               - Job creation announcements and employment trends
-               - Infrastructure improvements (roads, utilities, public transport)
-               - Major employers moving to or from the area
-            
-            3. Community & Government Sentiment:
-               - Local government statements on housing needs
-               - Community support or opposition to new housing developments
-               - Recent zoning changes or housing policies
-               - Incentives for affordable/attainable housing development
-               - Public commentary on housing needs from local officials
-            
-            4. Rental Market Data:
-               - Average gross rent in a 10-mile radius (critical for our ROI calculations)
-               - Rental price trends over the past 5 years
-               - Rental demand indicators
-               - Affordability metrics (% of income spent on housing)
-            
-            5. Competitive Analysis:
-               - Other housing developments planned or in progress
-               - Success or failure of similar developments in the region
-               - Market niches that are underserved
-            
-            RESEARCH OBJECTIVE: Determine if this location shows both:
-            1. Strong economic growth indicators (suggesting long-term development viability)
-            2. Housing affordability challenges (indicating community need for attainable housing)
-            3. Positive government/community sentiment toward new housing development
-            
-            Particularly focus on finding evidence that local governments and communities are actively 
-            seeking developers to build attainable housing to address local housing shortages.
-            
-            Use the internet to find current information. Focus on reliable sources like local government sites,
-            economic development agencies, news outlets, real estate market reports, and rental listing aggregators.
-            Provide specific citations and quotes from relevant officials or reports when possible.
-            """,
-            agent=agents["market_researcher"],
-            expected_output="A comprehensive report on housing market conditions, economic growth, and community sentiment toward attainable housing development, with specific citations",
-            context=[data_analysis_task]
-        )
-        
-        # Task for financial analysis
-        financial_analysis_task = Task(
-            description=f"""Analyze the financial feasibility of developing a 500+ home attainable housing 
-            master-planned community at {property_location}.
-            
-            The property is priced at ${property_data.get('For Sale Price', 'N/A')} with {property_data.get('Land Area (AC)', 'N/A')} acres.
-            
-            FINANCIAL ANALYSIS FRAMEWORK:
-            
-            1. Attainable Housing Development Model:
-               - Target 500+ homes at attainable price points (below market rate)
-               - Analyze if the lot size ({property_data.get('Land Area (AC)', 'N/A')} acres) is sufficient for this scale
-               - Calculate optimal density to achieve affordability while maintaining quality
-               - Determine price points that would be considered "attainable" in this market
-                 (typically 80-120% of area median income affordability)
-            
-            2. Development Economics:
-               - Per-home construction cost estimates for attainable housing
-               - Infrastructure and common area development costs
-               - Local impact fees and development charges
-               - Phasing strategy to optimize cash flow during multi-year development
-            
-            3. Market-Specific Financial Metrics:
-               - Home Affordability Score: {property_data.get('Home_Affordability', 'N/A')}
-               - Rent Affordability Score: {property_data.get('Rent_Affordability', 'N/A')}
-               - 2024 Median Home Value (5mi): ${property_data.get('2024 Median Home Value(5m)', 'N/A')}
-               - 2029 Median Home Value (5mi): ${property_data.get('2029 Median HH Value(5m)', 'N/A')}
-               - 2024 Median HH Income (5mi): ${property_data.get('2024 Med HH Inc(5m)', 'N/A')}
-               - Calculate the "affordability gap" in this market and how attainable housing addresses it
-            
-            4. Lot Development Economics (for reference):
-               - Lot Density: 3.5 lots per acre of land
-               - Total Potential Lots: {3.5 * float(property_data.get('Land Area (AC)', 0))} lots
-               - Initial Development Cost: $55,000 per lot
-               - Total Development Cost: ${55000 * 3.5 * float(property_data.get('Land Area (AC)', 0))}
-               - Total Lot Investment: ${float(property_data.get('For Sale Price', 0)) + (55000 * 3.5 * float(property_data.get('Land Area (AC)', 0)))}
-            
-            5. Attainable Housing ROI Analysis:
-               - Calculate realistic sale prices for attainable housing in this market
-               - Project development timeline and cash flow (5-year development horizon)
-               - Analyze profit margins at different price points
-               - Identify potential subsidies, tax incentives, or grants available for attainable housing
-               - Calculate internal rate of return (IRR) and return on investment (ROI)
-            
-            6. Sensitivity Analysis:
-               - Risk assessment if construction costs increase by 10-20%
-               - Impact of economic downturn on sales velocity
-               - Effects of potential interest rate changes
-               - Comparison of different attainable housing models (rent vs. own)
-            
-            7. Community Economic Impact:
-               - Projected economic impact of 500+ homes on the local economy
-               - Potential job creation during and after development
-               - Tax base expansion benefits for local government
-            
-            Based on this analysis, determine:
-            1. If the financial numbers support attainable housing development
-            2. The optimal price points and development approach
-            3. The expected ROI and timeline for the development
-            4. Key financial risks and mitigations
-            5. Whether this location represents a strong financial opportunity for attainable housing
-            """,
-            agent=agents["financial_analyst"],
-            expected_output="A comprehensive financial analysis for a 500+ home attainable housing development with ROI projections and optimal price points",
-            context=[data_analysis_task, market_research_task]
-        )
-        
-        # Task for development recommendations
-        development_recommendations_task = Task(
-            description=f"""Create a comprehensive attainable housing development strategy for a 500+ home 
-            master-planned community at {property_location}.
-            
-            Property details:
-            - Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres
-            - Zoning: {property_data.get('Zoning', 'N/A')}
-            - Proposed Land Use: {property_data.get('Proposed Land Use', 'N/A')}
-            - Composite Score: {property_data.get('Composite_Score', 'N/A')}
-            
-            ATTAINABLE HOUSING DEVELOPMENT STRATEGY:
-            
-            1. Community Vision & Positioning:
-               - Define the vision for an attainable housing community in this location
-               - Positioning relative to market needs and housing affordability challenges
-               - Community identity and branding approach
-               - How this development addresses the local housing crisis
-            
-            2. Development Program:
-               - Optimal mix of housing types and price points
-               - Density recommendations to achieve affordability while maintaining quality
-               - Amenities and community features that support attainable housing
-               - Phasing strategy for a 500+ home community
-               - Infrastructure and public space planning
-            
-            3. Regulatory Strategy:
-               - Zoning and entitlement approach
-               - Potential incentives and programs to support attainable housing
-               - Community engagement and approval strategy
-               - Environmental and sustainability considerations
-            
-            4. Marketing & Sales Strategy:
-               - Target resident profiles
-               - Messaging that emphasizes attainability and community benefits
-               - Outreach channels and partnership opportunities
-               - Pricing strategy that balances affordability with development economics
-            
-            5. Implementation Roadmap:
-               - Key project milestones
-               - Development timeline (with phases if appropriate)
-               - Critical path considerations
-               - Partnership and stakeholder engagement plan
-            
-            6. Risk Mitigation:
-               - Key development risks and mitigation strategies
-               - Market fluctuation contingency plans
-               - Regulatory challenge strategies
-            
-            7. Community Impact:
-               - How this development will address local housing affordability challenges
-               - Economic benefits to the community
-               - How to position the development as a solution to the housing crisis
-            
-            Based on all previous analyses (data, market, and financial), provide a comprehensive 
-            strategy for developing a successful attainable housing community that addresses 
-            local housing needs while ensuring a financially viable project.
-            
-            Focus particularly on how this development can help address the housing crisis in 
-            this area and why the local community and government would welcome this development.
-            """,
-            agent=agents["development_strategist"],
-            expected_output="A comprehensive attainable housing development strategy for a 500+ home community with specific recommendations",
-            context=[data_analysis_task, market_research_task, financial_analysis_task]
-        )
-        
-        # Task for final executive summary
-        executive_summary_task = Task(
-            description=f"""Create a concise executive summary for the attainable housing development opportunity 
-            at {property_location}, focused on how this project can address local housing affordability challenges 
-            while taking advantage of economic growth trends.
-            
-            Synthesize all findings and recommendations into a clear, actionable report that includes:
-            
-            1. Property & Market Overview:
-               - Location: {property_location}
-               - Price: ${property_data.get('For Sale Price', 'N/A')}
-               - Size: {property_data.get('Land Area (AC)', 'N/A')} acres
-               - Zoning: {property_data.get('Zoning', 'N/A')}
-               - Key market indicators of housing need and economic growth
-            
-            2. Attainable Housing Opportunity Assessment:
-               - Housing affordability gap analysis
-               - Evidence of housing crisis or shortage
-               - Community/government sentiment toward new housing
-               - Economic growth indicators supporting development
-            
-            3. Development Concept:
-               - Vision for a 500+ home attainable housing community
-               - Housing mix and price point strategy
-               - Key amenities and community features
-               - Phasing approach
-            
-            4. Financial Summary:
-               - Total development costs
-               - Projected returns and profitability
-               - Affordability metrics and target price points
-               - Potential incentives or subsidies
-            
-            5. Competitive Advantage:
-               - Why this location is ideal for attainable housing
-               - How this development addresses specific local needs
-               - Unique positioning opportunities
-            
-            6. Risks and Mitigations:
-               - Key development risks
-               - Market risks
-               - Regulatory risks
-               - Mitigation strategies
-            
-            7. SWOT Analysis:
-               - Strengths (location, market, timing, etc.)
-               - Weaknesses (challenges to overcome)
-               - Opportunities (housing crisis solutions, economic growth, etc.)
-               - Threats (competition, market shifts, etc.)
-            
-            8. Final Go/No-Go Recommendation:
-               - Clear recommendation on whether to proceed
-               - Key factors supporting this decision
-               - Critical success factors if proceeding
-               - Next steps and immediate priorities
-            
-            This summary must address the central question: "Is this location experiencing BOTH 
-            economic growth AND housing affordability challenges that would make it ideal for 
-            a large-scale attainable housing development?"
-            
-            Focus on creating a compelling case for why this development would be welcomed by 
-            the community and local government as a solution to housing challenges.
-            """,
-            agent=agents["development_strategist"],
-            expected_output="A complete executive summary with go/no-go recommendation for an attainable housing development",
-            context=[data_analysis_task, market_research_task, financial_analysis_task, development_recommendations_task]
-        )
-        
-        return [
-            data_analysis_task,
-            market_research_task,
-            financial_analysis_task,
-            development_recommendations_task,
-            executive_summary_task
-        ]
     
     def analyze_property(self, stock_number):
-        """Run a complete analysis on the property with the given stock number"""
+        """
+        Run a full property analysis using the CrewAI framework with specialized agents
+        for data analysis, web research, market analysis, and report generation.
+        """
         # Get property data
         property_data = self.get_property_data(stock_number)
         if not property_data:
@@ -859,52 +254,381 @@ class PropertyAnalyzer:
         # Create property location string
         property_location = f"{property_data.get('Property Address', '')}, {property_data.get('City', '')}, {property_data.get('State', '')} {property_data.get('Zip', '')}"
         
-        # Create agents and tasks
-        agents = self.create_agents()
-        tasks = self.create_tasks(agents, property_data, property_location)
+        # Show analysis header
+        use_colors = supports_color()
+        if use_colors:
+            print_header("PROPERTY ANALYSIS")
+            print(f"\n{Colors.GRAY}Analyzing property at {property_location}...{Colors.ENDC}\n")
+        else:
+            print("\n===== PROPERTY ANALYSIS =====")
+            print(f"\nAnalyzing property at {property_location}...\n")
         
-        # Create and run the crew with our custom TUI handler
-        callback_handler = ChatTUICallbackHandler() if supports_color() else None
+        # Import directly here to ensure we get the right version
+        from langchain.llms import Ollama
         
-        crew = Crew(
-            agents=list(agents.values()),
-            tasks=tasks,
-            verbose=0 if callback_handler else 2,  # Set verbose=0 when using our handler
-            callbacks=[callback_handler] if callback_handler else None,
-            process=Process.sequential  # Ensure sequential processing for better readability
+        # Create Ollama LLM instances directly for each agent - with full config
+        llm = Ollama(
+            model=OLLAMA_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            temperature=CREW_TEMPERATURE
         )
         
-        result = crew.kickoff()
-        
-        # Display a nicely formatted final result
-        if callback_handler:
-            width = min(os.get_terminal_size().columns, 80)
-            print("\n" + "=" * width)
-            print(f"{Colors.BOLD}{Colors.HEADER}EXECUTIVE SUMMARY{Colors.ENDC}")
-            print("=" * width + "\n")
+        try:
+            # Create the specialized agents according to the project plan
             
-            # Format the result text for readability
-            wrapped_result = textwrap.fill(
-                result, 
-                width=width - 2,
-                initial_indent="  ",
-                subsequent_indent="  "
+            # 1. Data Analysis Agent
+            data_analysis_agent = Agent(
+            role="Property Data Analyst",
+                goal="Analyze raw property metrics to identify key insights for development potential",
+                backstory="You are a specialist in demographic, economic, and environmental property data analysis. You extract meaningful patterns from complex datasets to support real estate development decisions.",
+                verbose=True,
+                llm=llm,
+                allow_delegation=False
             )
-            print(wrapped_result + "\n")
             
-            return "Analysis complete. See the executive summary above."
-        else:
+            # 2. Web Research Agent
+            web_research_agent = Agent(
+                role="Housing & Economic Research Specialist",
+                goal="Gather relevant external information about the property's location and market",
+                backstory="You are an expert at researching local economic trends, housing markets, and development regulations. You find key insights from the web to supplement property data analysis.",
+                verbose=True,
+                llm=llm,
+                tools=[WebResearchTool()],
+                allow_delegation=True
+            )
+            
+            # 3. Market Analysis Agent
+            market_analysis_agent = Agent(
+                role="Attainable Housing Market Analyst",
+                goal="Evaluate market suitability for the planned housing community",
+                backstory="You specialize in analyzing housing market data to determine optimal development strategies. You have expertise in evaluating demand patterns, competition, and pricing strategies.",
+            verbose=True,
+                llm=llm,
+                allow_delegation=False
+            )
+            
+            # 4. Report Generation Agent
+            report_generation_agent = Agent(
+                role="Attainable Housing Development Strategist",
+                goal="Compile all findings into a comprehensive strategic analysis report",
+                backstory="You have extensive experience in evaluating property development opportunities and creating strategic recommendations. You excel at integrating diverse insights into actionable guidance.",
+            verbose=True,
+                llm=llm,
+                allow_delegation=False
+        )
+        
+            # Create tasks for the agents
+            
+            # Task 1: Data Analysis
+        data_analysis_task = Task(
+            description=f"""Analyze the key metrics for the property at {property_location}.
+            
+                Property Details:
+                - Stock Number: {property_data.get('StockNumber', 'N/A')}
+            - Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres
+            - County: {property_data.get('County Name', 'N/A')}
+            - Zoning: {property_data.get('Zoning', 'N/A')}
+                - For Sale Price: ${property_data.get('For Sale Price', 'N/A')}
+                - Flood Risk: {property_data.get('In SFHA', 'N/A')} (Special Flood Hazard Area)
+                - FEMA Flood Zone: {property_data.get('Fema Flood Zone', 'N/A')}
+                
+                Demographic Analysis:
+                - Population (5mi): {property_data.get('2024 Population(5m)', 'N/A')}
+                - Population Growth (2020-2024, 5mi): {property_data.get('% Pop Grwth 2020-2024(5m)', 'N/A')}%
+                - Projected Growth (2024-2029, 5mi): {property_data.get('% Pop Grwth 2024-2029(5m)', 'N/A')}%
+                - Age Distribution (various age brackets available in data)
+                
+                Income Analysis:
+                - 2024 Median Household Income (5mi): ${property_data.get('2024 Med HH Inc(5m)', 'N/A')}
+                - 2024 Average Household Income (5mi): ${property_data.get('2024 Avg HH Inc(5m)', 'N/A')}
+                - Income trends and projections (2024-2029)
+            
+            Housing Market Metrics:
+            - 2024 Median Home Value (5mi): ${property_data.get('2024 Median Home Value(5m)', 'N/A')}
+                - Housing Value Distribution (across price ranges)
+                - Rental Market Data (median/average rents)
+                - Housing Occupancy Data (owner vs. renter)
+                
+                Proximity Services:
+                - Nearest Walmart: {property_data.get('Nearest_Walmart_Distance_Miles', 'N/A')} miles
+                - Nearest Hospital: {property_data.get('Nearest_Hospital_Distance_Miles', 'N/A')} miles
+                - Nearest Park: {property_data.get('Nearest_Park_Distance_Miles', 'N/A')} miles
+                
+                Market Analysis Scores:
+                - Home Affordability: {property_data.get('Home_Affordability', 'N/A')} (Percentile: {property_data.get('Home_Affordability Percentile', 'N/A')})
+                - Rent Affordability: {property_data.get('Rent_Affordability', 'N/A')} (Percentile: {property_data.get('Rent_Affordability Percentile', 'N/A')})
+                - Convenience Index: {property_data.get('Convenience_Index', 'N/A')} (Percentile: {property_data.get('Convenience_Index Percentile', 'N/A')})
+                - Population Access: {property_data.get('Population_Access', 'N/A')} (Percentile: {property_data.get('Population_Access Percentile', 'N/A')})
+                - Market Saturation: {property_data.get('Market_Saturation', 'N/A')} (Percentile: {property_data.get('Market_Saturation Percentile', 'N/A')})
+                - Composite Score: {property_data.get('Composite_Score', 'N/A')} (Percentile: {property_data.get('Composite_Score Percentile', 'N/A')})
+                
+                Using all the data available, perform a comprehensive analysis of this property's development potential for an attainable housing community with:
+                - 80% high-quality manufactured homes
+                - 15% apartment/condo homes
+                - 5% traditional/"stick" built homes
+                
+                Identify key strengths, concerns, and notable patterns in the data. Calculate how this property compares to typical development targets.
+                
+                Provide a detailed analysis with a clear assessment of the property's demographic, economic, and housing market potential.
+                """,
+                agent=data_analysis_agent,
+                expected_output="A comprehensive analysis of the property's raw data metrics with key insights for development potential."
+            )
+            
+            # Task 2: Web Research
+            web_research_task = Task(
+                description=f"""Research key information about the area around {property_location} that would impact housing development.
+                
+                Search for recent (within the last 2 years) information about:
+                
+                1. Local Economic Development:
+                   - Business expansions or relocations in {property_data.get('City', 'the area')} and {property_data.get('County Name', 'the county')}
+                   - Major employers and job growth trends
+                   - Economic development initiatives or challenges
+                   - Infrastructure projects (roads, utilities, public transit)
+                
+                2. Housing Market Conditions:
+                   - Evidence of housing shortage or crisis in the area
+                   - Recent housing developments and their reception
+                   - Affordable housing initiatives or programs
+                   - Public funding or grants available for housing development
+                   - Manufactured housing acceptance and regulations
+                
+                3. Government and Regulatory Environment:
+                   - Local government attitude toward development
+                   - Recent zoning changes or updates affecting residential development
+                   - Permitting process efficiency and challenges
+                   - Development incentives or tax benefits available
+                
+                4. Community Factors:
+                   - School quality and educational opportunities
+                   - Crime statistics and safety perception
+                   - Community amenities and quality of life indicators
+                   - Local sentiment toward growth and development
+                
+                5. Potential Partnership Opportunities:
+                   - Local employers seeking workforce housing
+                   - Educational institutions with housing needs
+                   - Healthcare providers seeking proximity housing
+                
+                For each finding, provide:
+                - Source URL or citation
+                - Date of information
+                - A brief summary of the key points
+                - Relevance to the proposed housing development
+                
+                Focus on information that would directly impact the viability of developing a mixed attainable housing community with manufactured homes, apartments, and traditional homes.
+                """,
+                agent=web_research_agent,
+                context=[data_analysis_task],
+                expected_output="A detailed research report on local economic, housing, and regulatory conditions with properly cited sources."
+            )
+            
+            # Task 3: Market Analysis
+            market_analysis_task = Task(
+                description=f"""Evaluate the market suitability of {property_location} for the planned housing community based on the data analysis and web research findings.
+                
+                Property Specifics:
+            - Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres
+                - For Sale Price: ${property_data.get('For Sale Price', 'N/A')}
+                - Current Zoning: {property_data.get('Zoning', 'N/A')}
+                
+                Using the data analysis and web research findings, assess:
+                
+                1. Demand Analysis:
+                   - Evaluate demand for different housing types (manufactured homes, apartments, traditional homes)
+                   - Assess if the planned 80/15/5 housing mix is optimal for this market
+                   - Identify target demographic segments most likely to be residents
+                
+                2. Competition Assessment:
+                   - Analyze current and planned housing developments in the area
+                   - Evaluate market saturation and vacancy rates
+                   - Identify competitive advantages for this property
+                
+                3. Pricing Strategy:
+                   - Recommend optimal price points for each housing type
+                   - Evaluate affordability relative to local incomes
+                   - Analyze rental vs. ownership demand patterns
+                
+                4. Amenities Assessment:
+                   - Determine which amenities would be most valuable for the target market
+                   - Evaluate demand for subscription services (housekeeping, landscaping, daycare)
+                   - Assess technology integration opportunities
+                
+                5. Development Phasing:
+                   - Recommend optimal phasing strategy based on market demand
+                   - Identify which housing types to prioritize in early phases
+                   - Suggest timeline considerations based on market conditions
+                
+                Provide a detailed market analysis with clear recommendations for adapting the development plan to match local market conditions and maximize ROI.
+                """,
+                agent=market_analysis_agent,
+                context=[data_analysis_task, web_research_task],
+                expected_output="A comprehensive market analysis with specific recommendations for housing mix, pricing, amenities, and development strategy."
+            )
+            
+            # Task 4: Report Generation
+            report_generation_task = Task(
+                description=f"""Create a comprehensive property analysis report for {property_location} by integrating all findings from the data analysis, web research, and market analysis.
+                
+                The report should include:
+                
+                1. Executive Summary (200-300 words):
+                   - Overall property suitability score (1-10)
+                   - Top 3 strengths of the property for development
+                   - Top 3 concerns or challenges
+                   - Clear acquisition recommendation (Highly Recommended, Recommended, Consider with Conditions, Not Recommended)
+                
+                2. Property Profile:
+                   - Basic property details (location, size, price, zoning)
+                   - Environmental assessment (flood risk analysis)
+                   - Proximity services evaluation
+                
+                3. Demographic Analysis:
+                   - Population trends and projections
+                   - Age distribution analysis with implications for community amenities
+                   - Income distribution analysis with affordability assessment
+                
+                4. Housing Market Analysis:
+                   - Current and projected housing value distribution
+                   - Rental market assessment
+                   - Market scores interpretation
+                
+                5. Economic Outlook:
+                   - Income trend projections
+                   - Local economic development assessment
+                   - Employment opportunities
+                
+                6. Development Opportunity Assessment:
+                   - Optimal housing mix recommendation (adjusting the 80/15/5 model if needed)
+                   - Target resident profiles
+                   - Amenity and service recommendations
+                   - Competitive advantage assessment
+                
+                7. Risk Assessment:
+                   - Market risks
+                   - Regulatory/zoning challenges
+                   - Environmental considerations
+                
+                8. Financial Projection:
+                   - Estimated development costs based on company's housing mix
+                   - Revenue potential based on local market data
+                   - ROI scenarios (conservative, moderate, optimistic)
+                
+                9. Strategic Recommendations:
+                   - Clear guidance on property acquisition
+                   - Development phasing strategy
+                   - Risk mitigation approaches
+                
+                Format the report in a clear, professional manner with distinct sections. Use bullet points for key findings and recommendations. Emphasize actionable insights throughout.
+                """,
+                agent=report_generation_agent,
+                context=[data_analysis_task, web_research_task, market_analysis_task],
+                expected_output="A complete property analysis report with executive summary, detailed findings, and strategic recommendations."
+            )
+            
+            # Create and run the crew
+            crew = Crew(
+                agents=[data_analysis_agent, web_research_agent, market_analysis_agent, report_generation_agent],
+                tasks=[data_analysis_task, web_research_task, market_analysis_task, report_generation_task],
+                        verbose=True,
+                process=Process.sequential
+            )
+            
+            print("\nStarting comprehensive property analysis (this may take several minutes)...")
+            print(f"Using {OLLAMA_MODEL} model for all agents...")
+            
+            # Execute the analysis
+            result = crew.kickoff()
+            
+            # Format and return the result
+            print_header("PROPERTY ANALYSIS COMPLETE")
+            print("\nResults:")
+            print(result)
+            
             return result
+            
+        except Exception as e:
+            print(f"Error during analysis: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            
+            # Provide a basic fallback result
+            basic_result = f"""
+PROPERTY ANALYSIS ERROR
+
+We encountered an error while analyzing {property_location}:
+{str(e)}
+
+Basic Property Information:
+- Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres
+- County: {property_data.get('County Name', 'N/A')}
+- Median Home Value (5mi): ${property_data.get('2024 Median Home Value(5m)', 'N/A')}
+- Median Income (5mi): ${property_data.get('2024 Med HH Inc(5m)', 'N/A')}
+- Population Growth: {property_data.get('% Pop Grwth 2020-2024(5m)', 'N/A')}%
+
+Please try again or check the system configuration.
+"""
+            print(basic_result)
+            return basic_result
+
+def test_web_search():
+    """Test the web search functionality to ensure it's working properly."""
+    try:
+        print("Testing enhanced web search functionality...")
+        web_tool = EnhancedWebResearchTool()
+        
+        if not web_tool.search_available:
+            print("Web search is not available. DuckDuckGo search library is not installed.")
+            print("Install it with: pip install -U duckduckgo-search")
+            return False
+            
+        # Try a simple search
+        test_query = "real estate market trends"
+        results = web_tool.search(test_query, max_results=2)
+        
+        if not results or len(results) == 0:
+            print("Web search test failed. No results returned.")
+            return False
+            
+        # Print a sample result to confirm it's working
+        print("Web search test successful. Sample result:")
+        print(f"Title: {results[0].get('title', 'No title')}")
+        print(f"Snippet: {results[0].get('body', 'No content')[:100]}...")
+        return True
+        
+    except Exception as e:
+        print(f"Web search test failed with error: {e}")
+        return False
 
 def main():
     """Main function to run the property analysis"""
-    # Prepare terminal for colored output if supported
-    use_colors = supports_color()
-    header_style = f"{Colors.BOLD}{Colors.HEADER}" if use_colors else ""
-    reset_style = Colors.ENDC if use_colors else ""
+    # Check for help flag
+    if len(sys.argv) > 1 and sys.argv[1] in ['--help', '-h', 'help', '?']:
+        show_help()
+        return
+        
+    print_header("PROPERTY ANALYSIS SYSTEM")
+    print("This tool analyzes properties for high-density, master-planned community development")
+    print("(Use --help for detailed information about the system)")
     
-    print(f"\n{header_style}===== PROPERTY ANALYSIS CREW ====={reset_style}")
-    print("This tool analyzes properties for attainable housing development potential")
+    # Ensure we're using local Llama model
+    os.environ["CREWAI_LOCAL_MODEL"] = "true"
+    os.environ["CREWAI_FORCE_LOCAL"] = "true"
+    os.environ["ANTHROPIC_API_KEY"] = "" 
+    os.environ["OPENAI_API_KEY"] = ""
+    
+    # Explicitly tell CrewAI to use Ollama
+    import crewai
+    if hasattr(crewai, 'set_default_llm'):
+        try:
+            from langchain.llms import Ollama
+            llm = Ollama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=CREW_TEMPERATURE)
+            crewai.set_default_llm(llm)
+            print("Successfully set CrewAI's default LLM to Ollama")
+        except Exception as e:
+            print(f"Warning: Couldn't set CrewAI's default LLM: {e}")
     
     # Check for Ollama installation and setup model
     if not check_ollama_installed():
@@ -919,8 +643,19 @@ def main():
         print("On Windows: Start Ollama from the start menu or run 'ollama serve' in a command prompt")
         sys.exit(1)
     else:
-        print("\nUsing Llama 3 8B model via Ollama")
-        setup_ollama_model()
+        print("\nUsing Llama 3 model via Ollama")
+        try:
+            # Make a direct request to Ollama API as a test
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": OLLAMA_MODEL, "prompt": "Hello, are you working?", "stream": False}
+            )
+            if response.status_code == 200:
+                print("Successfully connected to Ollama API")
+            else:
+                print(f"Warning: Ollama API responded with status code {response.status_code}")
+        except Exception as e:
+            print(f"Warning: Error testing Ollama API: {e}")
     
     try:
         # Initialize analyzer
@@ -937,8 +672,23 @@ def main():
         except ValueError as e:
             print(f"\nError with CSV file: {e}")
             print("\nPlease check your CSV file format. It should include columns for:")
-            print("StockNumber, Property Address, City, State, For Sale Price, Land Area (AC)")
+            print("StockNumber, Property Address, City, State")
             sys.exit(1)
+        
+        # Setup Ollama model
+        setup_ollama_model()
+        
+        # Test web search functionality
+        print("\nVerifying web search capability...")
+        search_available = test_web_search()
+        if not search_available:
+            print("\nWarning: Web search functionality is limited or unavailable.")
+            print("The Web Research Agent may not be able to gather external information.")
+            print("Analysis will proceed using only the data in your CSV file.")
+            proceed = input("Do you want to continue without web search? [Y/n]: ").strip().lower()
+            if proceed == 'n':
+                print("Exiting. Please install duckduckgo-search package and try again.")
+                sys.exit(0)
         
         # Check if we can read the CSV file
         try:
@@ -956,17 +706,10 @@ def main():
             sys.exit(1)
         
         # Show available properties
-        if use_colors:
-            print(f"\n{Colors.CYAN}Available Properties:{Colors.ENDC}")
-        else:
-            print("\nAvailable Properties:")
-            
+        print("\nAvailable Properties:")
         for i, prop in enumerate(properties[:10]):  # Show first 10 for brevity
             try:
-                if use_colors:
-                    print(f"{Colors.BOLD}{i+1}.{Colors.ENDC} Stock# {prop['StockNumber']} - {prop.get('Property Address', 'N/A')}, {prop.get('City', 'N/A')}, {prop.get('State', 'N/A')}")
-                else:
-                    print(f"{i+1}. Stock# {prop['StockNumber']} - {prop.get('Property Address', 'N/A')}, {prop.get('City', 'N/A')}, {prop.get('State', 'N/A')}")
+                print(f"{i+1}. Stock# {prop['StockNumber']} - {prop.get('Property Address', 'N/A')}, {prop.get('City', 'N/A')}, {prop.get('State', 'N/A')}")
             except KeyError:
                 print(f"{i+1}. Stock# {prop.get('StockNumber', 'Unknown')} - (Missing address information)")
         
@@ -974,53 +717,42 @@ def main():
             print(f"...and {len(properties) - 10} more properties")
         
         # Get stock number from user
-        stock_number = input("\nEnter the Stock Number to analyze: ")
+        stock_number = input("\nEnter the Stock Number to analyze: ").strip()
         
-        try:
-            stock_number = int(stock_number)
-        except ValueError:
-            print("Invalid input. Please enter a numeric Stock Number.")
+        if not stock_number:
+            print("Error: No stock number entered. Please try again.")
             return
         
         # Get property details for display
         property_data = analyzer.get_property_data(stock_number)
         if not property_data:
-            print(f"Error: Property with Stock Number {stock_number} was not found in the dataset.")
+            print(f"Error: Property with Stock Number '{stock_number}' was not found in the dataset.")
+            print("Available stock numbers include:")
+            for i, prop in enumerate(properties[:5]):  # Show first 5 for brevity
+                print(f"  - {prop['StockNumber']}")
+            if len(properties) > 5:
+                print(f"  - ... and {len(properties) - 5} more")
             return
             
         # Display property summary before analysis
         property_location = f"{property_data.get('Property Address', '')}, {property_data.get('City', '')}, {property_data.get('State', '')} {property_data.get('Zip', '')}"
         
-        if use_colors:
-            print(f"\n{Colors.BOLD}{Colors.GREEN}Property Selected:{Colors.ENDC}")
-            print(f"{Colors.BOLD}Location:{Colors.ENDC} {property_location}")
-            print(f"{Colors.BOLD}Price:{Colors.ENDC} ${property_data.get('For Sale Price', 'N/A')}")
-            print(f"{Colors.BOLD}Land Area:{Colors.ENDC} {property_data.get('Land Area (AC)', 'N/A')} acres")
-            print(f"{Colors.BOLD}Zoning:{Colors.ENDC} {property_data.get('Zoning', 'N/A')}")
-        else:
-            print(f"\nProperty Selected:")
-            print(f"Location: {property_location}")
-            print(f"Price: ${property_data.get('For Sale Price', 'N/A')}")
-            print(f"Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres")
-            print(f"Zoning: {property_data.get('Zoning', 'N/A')}")
+        print(f"\nProperty Selected:")
+        print(f"Location: {property_location}")
+        print(f"Land Area: {property_data.get('Land Area (AC)', 'N/A')} acres")
+        print(f"County: {property_data.get('County Name', 'N/A')}")
+        print(f"For Sale Price: ${property_data.get('For Sale Price', 'N/A')}")
         
         # Run the analysis
         print(f"\nAnalyzing property with Stock Number {stock_number}...\n")
-        print("This analysis may take several minutes with the Llama 3 model.")
+        print("This comprehensive analysis may take 10-15 minutes with the Llama 3 model.")
         print("The system is working even if it appears to be inactive.")
         
         try:
-            result = analyzer.analyze_property(stock_number)
-            
-            # With our new TUI formatting, we don't need to print the result again
-            # as it's already handled in the analyze_property method
-            if not use_colors:
-                print("\n==== PROPERTY ANALYSIS RESULT ====\n")
-                print(result)
-                
-        except KeyError:
-            print(f"Error: Property with Stock Number {stock_number} was not found in the dataset.")
-            print("Please check the Stock Number and try again.")
+            analyzer.analyze_property(stock_number)
+        except Exception as e:
+            print(f"\nError during analysis: {e}")
+            print("Please try again with a different property.")
             
     except Exception as e:
         print(f"\nUnexpected error: {str(e)}")
@@ -1035,8 +767,54 @@ def main():
         print("1. Make sure your CSV file exists at DATA/master.csv and has the correct format")
         print("2. Check that Ollama is running (run 'ollama serve' in a terminal)")
         print("3. Make sure the Llama 3 model is available (run 'ollama pull llama3')")
-        print("4. Check your internet connection for web search functionality")
-        print("5. If the problem persists, try running the startup.sh script again to reset the environment")
+
+def show_help():
+    """Display help information about the system and how to interpret results."""
+    print_header("PROPERTY ANALYSIS SYSTEM HELP")
+    
+    print("\nOVERVIEW:")
+    print("This system analyzes property data for high-density, master-planned community development.")
+    print("It uses a team of specialized AI agents powered by Llama 3.3 70B to provide comprehensive")
+    print("analysis and recommendations for properties in your dataset.")
+    
+    print("\nSYSTEM REQUIREMENTS:")
+    print("- Python 3.9+ with required packages installed")
+    print("- Ollama installed and running (https://ollama.com)")
+    print("- Llama 3.3 70B model downloaded (approximately 45GB)")
+    print("- 16GB+ RAM recommended (32GB preferred for optimal performance)")
+    print("- Internet connection for web research component")
+    
+    print("\nDATA FORMAT:")
+    print("The system expects a CSV file named 'master.csv' in the DATA directory with these columns:")
+    print("- StockNumber: Unique identifier for each property")
+    print("- Property Address, City, State, Zip: Location information")
+    print("- Land Area (AC): Size in acres")
+    print("- For Sale Price: Property's asking price")
+    print("- And numerous demographic, economic, and market data columns")
+    
+    print("\nANALYSIS PROCESS:")
+    print("1. Data Analysis Agent: Evaluates raw property metrics, demographics, and environmental factors")
+    print("2. Web Research Agent: Researches local economic trends, regulations, and market conditions")
+    print("3. Market Analysis Agent: Assesses market fit for the company's development model")
+    print("4. Report Generation Agent: Creates comprehensive analysis and recommendations")
+    
+    print("\nINTERPRETING RESULTS:")
+    print("The final report is organized into sections:")
+    print("- Executive Summary: Overall rating (1-10) and key findings")
+    print("- Property Profile: Basic details and environmental assessment")
+    print("- Demographic Analysis: Population and income trends")
+    print("- Housing Market Analysis: Current and projected housing values")
+    print("- Development Opportunity Assessment: Housing mix and target residents")
+    print("- Financial Projection: Development costs, revenue potential, and ROI")
+    print("- Strategic Recommendations: Clear guidance on property acquisition")
+    
+    print("\nTROUBLESHOOTING:")
+    print("- If analysis is slow: This is normal, as the AI processes complex data")
+    print("- If analysis fails: Check Ollama is running and the model is downloaded")
+    print("- If data errors occur: Ensure your CSV has all required columns")
+    
+    print("\nFor more help, refer to the project documentation or contact support.")
+    print("")
 
 if __name__ == "__main__":
     main()
